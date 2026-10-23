@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>VectorForge — AI 2D CAD</title>
-<link rel="stylesheet" href="style.css?v=20261023-4">
+<title data-i18n="VectorForge — AI 2D CAD">VectorForge — AI 2D CAD</title>
+<link rel="stylesheet" href="style.css?v=20261023-5">
 </head>
 <body>
 
@@ -12,76 +12,95 @@
 <header id="console">
   <div id="chat-log" aria-live="polite"></div>
   <form id="chat-form">
-    <span id="conn-light" class="off" title="not connected — paste your API key"></span>
+    <span id="conn-light" class="off" title="Checking saved server connection…" data-i18n-title="Checking saved server connection…"></span>
     <span class="prompt">&gt;</span>
-    <input id="chat-input" aria-label="Design command or API key" spellcheck="false" autocapitalize="off" type="text" placeholder='command or design request… (paste sk-… key to connect)' autocomplete="off">
-    <button type="submit" id="send-btn" title="Send" aria-label="Send">⏎</button>
-    <button type="button" id="cancel-request" hidden>Stop</button>
+    <input id="chat-input" aria-label="Design command or API key" spellcheck="false" autocapitalize="off" type="text" placeholder='command or design request… (no key needed for the prototype)' autocomplete="off" data-i18n-aria-label="Design command or API key" data-i18n-placeholder="command or design request… (no key needed for the prototype)">
+    <button type="submit" id="send-btn" title="Send" aria-label="Send" data-i18n-title="Send" data-i18n-aria-label="Send">⏎</button>
+    <button type="button" id="cancel-request" hidden data-i18n="Stop">Stop</button>
   </form>
 </header>
 
 <!-- tool selections: small key-sized chips -->
 <nav id="topbar">
   <div class="tools" id="draw-tools">
-    <button data-tool="select" class="tool active" title="Select / move (V)">Select</button>
-    <button data-tool="line" class="tool" title="Line (L)">Line</button>
-    <button data-tool="circle" class="tool" title="Circle (C)">Circle</button>
-    <button data-tool="rect" class="tool" title="Rectangle (R)">Rect</button>
-    <button data-tool="star" class="tool" title="Star (S)">Star</button>
-    <button data-tool="arc" class="tool" title="Arc (A)">Arc</button>
+    <button data-tool="select" class="tool active" title="Select / move (V)" data-i18n="Select" data-i18n-title="Select / move (V)">Select</button>
+    <button data-tool="line" class="tool" title="Line (L)" data-i18n="Line" data-i18n-title="Line (L)">Line</button>
+    <button data-tool="circle" class="tool" title="Circle (C)" data-i18n="Circle" data-i18n-title="Circle (C)">Circle</button>
+    <button data-tool="rect" class="tool" title="Rectangle (R)" data-i18n="Rect" data-i18n-title="Rectangle (R)">Rect</button>
+    <button data-tool="star" class="tool" title="Star (S)" data-i18n="Star" data-i18n-title="Star (S)">Star</button>
+    <button data-tool="arc" class="tool" title="Arc (A)" data-i18n="Arc" data-i18n-title="Arc (A)">Arc</button>
+    <button data-tool="bezier" class="tool" title="Bezier curve (B): click start, control 1, control 2, end" data-i18n="Bezier" data-i18n-title="Bezier curve (B): click start, control 1, control 2, end">Bezier</button>
+    <button data-tool="text" class="tool" title="Text (T)" data-i18n="Text" data-i18n-title="Text (T)">Text</button>
   </div>
   <div class="actions">
-    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
-    <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
-    <button id="delete-selected" title="Delete selected object (Delete / Backspace)" disabled>Delete</button>
-    <button id="timeline-toggle" aria-controls="timeline-panel" aria-expanded="false">Timeline</button>
-    <button id="export-svg">SVG</button>
-    <button id="export-dxf">DXF</button>
-    <button id="settings-btn">API</button>
+    <button id="undo" title="Undo (Ctrl+Z)" data-i18n="Undo" data-i18n-title="Undo (Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl+Y)" data-i18n="Redo" data-i18n-title="Redo (Ctrl+Y)">Redo</button>
+    <button id="delete-selected" title="Delete selected object (Delete / Backspace)" disabled data-i18n="Delete" data-i18n-title="Delete selected object (Delete / Backspace)">Delete</button>
+    <button id="copy-selected" title="Copy selected object (Ctrl+C)" disabled data-i18n="Copy" data-i18n-title="Copy selected object (Ctrl+C)">Copy</button>
+    <button id="paste-selected" title="Paste copied object (Ctrl+V)" disabled data-i18n="Paste" data-i18n-title="Paste copied object (Ctrl+V)">Paste</button>
+    <button id="snap-toggle" class="active" title="Snap to geometry, perpendicular feet and tangents" aria-pressed="true" data-i18n="Snap" data-i18n-title="Snap to geometry, perpendicular feet and tangents">Snap</button>
+    <button id="measurements-toggle" class="active" title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry." aria-pressed="true" data-i18n="Measurements" data-i18n-title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry.">Measurements</button>
+    <button id="timeline-toggle" aria-controls="timeline-panel" aria-expanded="false" data-i18n="Timeline">Timeline</button>
+    <button id="export-svg" data-i18n="SVG">SVG</button>
+    <button id="export-dxf" data-i18n="DXF">DXF</button>
+    <button id="settings-btn" data-i18n="API">API</button>
+    <select id="language-select" aria-label="Language" title="Language" data-i18n-title="Language" data-i18n-aria-label="Language"><option value="en" lang="en">English</option><option value="zh" lang="zh-CN">中文</option></select>
   </div>
 </nav>
 
 <main id="workspace">
-  <canvas id="canvas" tabindex="0" aria-label="Drawing canvas"></canvas>
+  <canvas id="canvas" tabindex="0" aria-label="Drawing canvas" data-i18n-aria-label="Drawing canvas"></canvas>
   <div id="statusbar">
     <span id="coords">0, 0 mm</span>
-    <span id="hint">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value</span>
+    <span id="hint" data-i18n="Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value</span>
   </div>
 
-  <aside id="timeline-panel" aria-label="Timeline" aria-hidden="true" inert>
-    <div class="panel-heading"><h2>Timeline</h2><button id="timeline-close" aria-label="Close timeline" class="close-btn">×</button></div>
+  <aside id="timeline-panel" aria-label="Timeline" aria-hidden="true" inert data-i18n-aria-label="Timeline">
+    <div class="panel-heading"><h2 data-i18n="Timeline">Timeline</h2><button id="timeline-close" aria-label="Close timeline" class="close-btn" data-i18n-aria-label="Close timeline">×</button></div>
     <ul id="timeline"></ul>
   </aside>
 </main>
 
 <dialog id="settings-dialog" aria-labelledby="settings-title">
   <form id="settings-form">
-    <div class="panel-heading"><h2 id="settings-title">Qwen API Connection</h2><button type="button" id="settings-close" class="close-btn" aria-label="Close API settings">×</button></div>
-    <p class="note">Your key stays in memory in this tab only. Reloading disconnects it. With the relay enabled, it is sent over HTTPS to the relay shown below and then to your selected Alibaba endpoint. It is never saved in browser storage.</p>
-    <label>Base URL <input id="set-base" type="text" autocomplete="off" spellcheck="false"></label>
-    <label>Model <input id="set-model" type="text" autocomplete="off" spellcheck="false"></label>
-    <label>API Key <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste sk-… (leave blank to keep current key)"></label>
-    <label>Relay URL <input id="set-relay-url" type="text" autocomplete="off" spellcheck="false"></label>
-    <label class="row"><input id="set-relay" type="checkbox"> Use relay (Alibaba endpoints usually block direct browser calls)</label>
+    <div class="panel-heading"><h2 id="settings-title" data-i18n="Qwen API Connection">Qwen API Connection</h2><button type="button" id="settings-close" class="close-btn" aria-label="Close API settings" data-i18n-aria-label="Close API settings">×</button></div>
+    <p class="note" data-i18n="The prototype uses a saved server-side key by default; no sign-in or key paste is needed. Your own key is optional and stays in this tab only. When using your key with the relay, it is sent to the relay and your selected Alibaba endpoint. No key is saved in browser storage.">The prototype uses a saved server-side key by default; no sign-in or key paste is needed. Your own key is optional and stays in this tab only. When using your key with the relay, it is sent to the relay and your selected Alibaba endpoint. No key is saved in browser storage.</p>
+    <label><span data-i18n="Connection mode">Connection mode</span> <select id="set-mode"><option value="server" data-i18n="Saved server key (prototype)">Saved server key (prototype)</option><option value="byok" data-i18n="Use my own API key">Use my own API key</option></select></label>
+    <label><span data-i18n="Base URL">Base URL</span> <input id="set-base" type="text" autocomplete="off" spellcheck="false"></label>
+    <label><span data-i18n="Model">Model</span> <input id="set-model" type="text" autocomplete="off" spellcheck="false"></label>
+    <label><span data-i18n="API Key">API Key</span> <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste sk-… (leave blank to keep current key)" data-i18n-placeholder="Paste sk-… (leave blank to keep current key)"></label>
+    <label><span data-i18n="Relay URL">Relay URL</span> <input id="set-relay-url" type="text" autocomplete="off" spellcheck="false"></label>
+    <label class="row"><input id="set-relay" type="checkbox"> <span data-i18n="Use relay (Alibaba endpoints usually block direct browser calls)">Use relay (Alibaba endpoints usually block direct browser calls)</span></label>
     <p id="settings-error" role="alert" hidden></p>
     <menu>
-      <button type="button" id="settings-disconnect">Disconnect</button>
-      <button type="button" id="settings-cancel">Cancel</button>
-      <button type="submit" id="settings-save">Connect</button>
+      <button type="button" id="settings-disconnect" data-i18n="Disconnect">Disconnect</button>
+      <button type="button" id="settings-cancel" data-i18n="Cancel">Cancel</button>
+      <button type="submit" id="settings-save" data-i18n="Connect">Connect</button>
     </menu>
   </form>
 </dialog>
 
 <dialog id="dimension-dialog" aria-labelledby="dimension-title">
   <form id="dimension-form">
-    <div class="panel-heading"><h2 id="dimension-title">Edit dimension</h2><button type="button" id="dimension-close" class="close-btn" aria-label="Close dimension editor">×</button></div>
-    <label>Value (mm)<input id="dim-edit" type="number" step="any" min="0.000001" max="1000000" required></label>
+    <div class="panel-heading"><h2 id="dimension-title" data-i18n="Edit dimension">Edit dimension</h2><button type="button" id="dimension-close" class="close-btn" aria-label="Close dimension editor" data-i18n-aria-label="Close dimension editor">×</button></div>
+    <label><span data-i18n="Value (mm)">Value (mm)</span> <input id="dim-edit" type="number" step="any" min="0.000001" max="1000000" required></label>
     <p id="dimension-error" role="alert" hidden></p>
-    <menu><button type="button" id="dimension-cancel">Cancel</button><button type="submit">Apply</button></menu>
+    <menu><button type="button" id="dimension-cancel" data-i18n="Cancel">Cancel</button><button type="submit" data-i18n="Apply">Apply</button></menu>
   </form>
 </dialog>
 
-<script type="module" src="js/main.mjs?v=20261023-4"></script>
+<dialog id="text-dialog" aria-labelledby="text-title">
+  <form id="text-form">
+    <div class="panel-heading"><h2 id="text-title" data-i18n="Add text">Add text</h2><button type="button" id="text-close" class="close-btn" aria-label="Close text editor" data-i18n-aria-label="Close text editor">×</button></div>
+    <label><span data-i18n="Text content">Text content</span> <input id="text-content" type="text" maxlength="120" required autocomplete="off"></label>
+    <label><span data-i18n="Text size (mm)">Text size (mm)</span> <input id="text-size" type="number" value="10" step="any" min="0.000001" max="1000000" required></label>
+    <p class="note" data-i18n="Text exports as editable text, not outlined cutting paths.">Text exports as editable text, not outlined cutting paths.</p>
+    <p id="text-error" role="alert" hidden></p>
+    <menu><button type="button" id="text-cancel" data-i18n="Cancel">Cancel</button><button type="submit" data-i18n="Add text">Add text</button></menu>
+  </form>
+</dialog>
+
+<script type="module" src="js/main.mjs?v=20261023-5"></script>
 </body>
 </html>
 

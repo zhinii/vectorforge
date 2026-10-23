@@ -75,6 +75,7 @@ button.active { background: var(--accent); color: #08111f; border-color: var(--a
 }
 #topbar::-webkit-scrollbar { display: none; }
 .tools { display: flex; gap: 5px; }
+#language-select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; font: inherit; min-height: 32px; }
 .actions { margin-left: auto; display: flex; gap: 5px; }
 
 /* ---- canvas ---- */
@@ -153,8 +154,9 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 
 @media (max-width: 820px) {
   #topbar { flex-direction: column; overflow: visible; gap: 6px; padding: 6px; }
-  .tools, .actions { margin: 0; flex: none; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
-  .actions { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .tools, .actions { margin: 0; flex: none; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
+  .actions { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  #language-select { min-width: 0; width: 100%; font-size: 12px; }
   #topbar button { padding: 7px 2px; min-height: 40px; font-size: 11px; }
   #chat-form { padding: 6px; gap: 6px; }
   #chat-input { width: 0; }
@@ -163,3 +165,5 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
   dialog button { min-height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+#conn-light.ready { background: #92a8c9; }
+#settings-dialog select { width: 100%; margin-top: 4px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 16px; }

@@ -1,8 +1,10 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-4';
-import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-4';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-4';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-5';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-5';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-5';
+import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-5';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-5';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -24,12 +26,13 @@ function resize() {
 // ---- undo/redo (document snapshots) ----
 const undoStack = [], redoStack = [];
 function snapshot() {
-  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId });
+  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId, labelOffsets });
 }
 function pushUndo() { cancelDesignRequest(); undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
 function restore(snap) {
   const d = JSON.parse(snap);
   doc.entities = d.entities; doc.timeline = d.timeline; doc.selectedId = d.selectedId;
+  labelOffsets = d.labelOffsets || {};
   pending = null; drag = null; refreshTimeline(); draw();
 }
 function undo() { if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); restore(undoStack.pop()); }
@@ -40,19 +43,39 @@ let tool = 'select';
 let drag = null;          // {mode:'pan'} | {mode:'grip',e,grip} | {mode:'move',e,start}
 let dimBoxes = [];        // screen-space rects of dimension labels, for dblclick
 let mouse = [0, 0];       // world coords
+let clipboard = null, pasteCount = 0;
+let snapEnabled = true, snapTarget = null;
+let labelOffsets = {}, selectedMeasurement = null, measurementsEnabled = true;
+const centerOf = e => e.p1 ? [(e.p1[0] + e.p2[0])/2, (e.p1[1] + e.p2[1])/2] : e.c;
 
 const COARSE = window.matchMedia('(pointer: coarse)').matches;
 const GRIP_TOL = COARSE ? 18 : 7;   // px
 const PICK_TOL = COARSE ? 16 : 6;   // px
+function drawingPoint(point) {
+  snapTarget = snapEnabled && (tool !== 'select' || drag?.mode === 'grip') ? snapPoint(point, doc.entities, {
+    scale: view.s, tolerancePx: COARSE ? 18 : 10,
+    from: tool === 'line' ? pending?.start : null,
+    excludeIds: drag?.e ? [drag.e.id] : [],
+  }) : null;
+  return snapTarget?.point || point;
+}
 
 // ---- drawing tools (click-click) ----
 let pending = null;       // first point / partial params for the active tool
 
 function canvasClick(world) {
   if (tool === 'select') return false;
+  if (tool === 'text') {
+    textPosition = world.slice();
+    document.getElementById('text-content').value='';
+    document.getElementById('text-size').value='10';
+    document.getElementById('text-error').hidden=true;
+    openDialog(textDialog,document.getElementById('text-content'));
+    return true;
+  }
   if (!pending) {
     pending = { start: world };
-    setHint(tool === 'line' ? 'Click the end point' :
+    setHint(tool === 'bezier' ? 'Click the first control handle' : tool === 'line' ? 'Click the end point' :
             tool === 'circle' ? 'Click the radius' :
             tool === 'rect' ? 'Click the opposite corner' :
             tool === 'star' ? 'Click the outer radius' :
@@ -61,6 +84,11 @@ function canvasClick(world) {
   }
   const [x0, y0] = pending.start, [x1, y1] = world;
   let op = null;
+  if (tool === 'bezier') {
+    if (!pending.control1) { pending.control1 = world; setHint('Click the second control handle'); return true; }
+    if (!pending.control2) { pending.control2 = world; setHint('Click the end point'); return true; }
+    op = { op: 'bezier', from: pending.start, control1: pending.control1, control2: pending.control2, to: world };
+  }
   if (tool === 'line' && Math.hypot(x1-x0, y1-y0) < .001) return true;
   if (tool === 'line') op = { op: 'line', from: [x0, y0], to: [x1, y1] };
   else if (tool === 'circle') op = { op: 'circle', center: [x0, y0], radius: Math.max(0.5, Math.hypot(x1 - x0, y1 - y0)) };
@@ -77,7 +105,7 @@ function canvasClick(world) {
     doc.selectedId = created[0] || null;
     refreshTimeline();
   }
-  pending = null;
+  pending = null; snapTarget = null;
   setHint('');
   draw();
   return true;
@@ -91,7 +119,13 @@ function drawPreview() {
   ctx.strokeStyle = '#4da3ff';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  if (tool === 'line') { const a = w2s([x0, y0]), b = w2s([x1, y1]); ctx.moveTo(...a); ctx.lineTo(...b); }
+  if (tool === 'bezier') {
+    const a = w2s(pending.start), b = w2s(mouse);
+    ctx.moveTo(...a);
+    if (pending.control2) ctx.bezierCurveTo(...w2s(pending.control1), ...w2s(pending.control2), ...b);
+    else { if (pending.control1) ctx.lineTo(...w2s(pending.control1)); ctx.lineTo(...b); }
+  }
+  else if (tool === 'line') { const a = w2s([x0, y0]), b = w2s([x1, y1]); ctx.moveTo(...a); ctx.lineTo(...b); }
   else if (tool === 'circle' || (tool === 'arc' && !pending.radius) || tool === 'star') {
     const c = w2s([x0, y0]); ctx.arc(c[0], c[1], Math.hypot(x1 - x0, y1 - y0) * view.s, 0, 2 * Math.PI);
   } else if (tool === 'rect') {
@@ -112,12 +146,18 @@ function draw() {
   document.getElementById('undo').disabled = !undoStack.length;
   document.getElementById('redo').disabled = !redoStack.length;
   document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
+  document.getElementById('copy-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
+  document.getElementById('paste-selected').disabled = !clipboard;
   const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
   drawGrid(W, H);
   dimBoxes = [];
 
   for (const e of doc.entities) {
+    if (e.type === 'text') {
+      ctx.save(); ctx.font = `${e.size*view.s}px sans-serif`; ctx.textBaseline='alphabetic';
+      ctx.fillStyle=e.id===doc.selectedId?'#ffb84d':'#dbe2ec'; ctx.fillText(e.text,...w2s(e.c)); ctx.restore(); continue;
+    }
     const pts = entityPoints(e);
     const sel = e.id === doc.selectedId;
     ctx.beginPath();
@@ -129,8 +169,9 @@ function draw() {
   }
   // grips + dimensions of the selected entity (context, per design discussion)
   const sel = doc.entities.find(e => e.id === doc.selectedId);
-  if (sel) { drawGrips(sel); drawDimensions(sel); }
+  if (sel) { drawGrips(sel); drawDimensions(sel); if (measurementsEnabled) drawNearbyDimensions(sel); }
   drawPreview();
+  drawSnapTarget();
   requestCoords();
 }
 
@@ -152,12 +193,17 @@ function drawGrid(W, H) {
 }
 
 function drawGrips(e) {
+  if (e.type === 'bezier') {
+    ctx.save(); ctx.strokeStyle = '#637a96'; ctx.setLineDash([4, 4]); ctx.beginPath();
+    ctx.moveTo(...w2s(e.p1)); ctx.lineTo(...w2s(e.c1));
+    ctx.moveTo(...w2s(e.p2)); ctx.lineTo(...w2s(e.c2)); ctx.stroke(); ctx.restore();
+  }
   ctx.fillStyle = '#4da3ff';
   for (const g of entityGrips(e)) {
     const s = w2s(g.get());
     ctx.fillRect(s[0] - 3.5, s[1] - 3.5, 7, 7);
   }
-  const c = e.type === 'line' ? [(e.p1[0] + e.p2[0]) / 2, (e.p1[1] + e.p2[1]) / 2] : e.c;
+  const c = centerOf(e);
   const s = w2s(c);
   ctx.strokeStyle = '#4da3ff';
   ctx.strokeRect(s[0] - 3.5, s[1] - 3.5, 7, 7);
@@ -167,7 +213,7 @@ function drawDimensions(e) {
   ctx.font = '12px system-ui';
   for (const d of entityDimensions(e)) {
     const s = w2s(d.anchor);
-    const text = d.label;
+    const text = t(d.label);
     const w = ctx.measureText(text).width;
     const x = s[0] + 10, y = s[1] - 10;
     ctx.fillStyle = 'rgba(22,40,61,.92)';
@@ -178,6 +224,43 @@ function drawDimensions(e) {
     ctx.fillText(text, x, y);
     dimBoxes.push({ x: x - 4, y: y - 13, w: w + 8, h: 18, dim: d, entity: e });
   }
+}
+
+// Measurements are read-only geometry observations, not permanent constraints.
+// Their offsets are screen-space annotations so dragging a label cannot reshape.
+function drawNearbyDimensions(e) {
+  const nearby = nearbyMeasurements(e, doc.entities, { limit: 3, maxDistance: 180 / view.s });
+  ctx.save(); ctx.font = '12px system-ui';
+  nearby.forEach((m, i) => {
+    const key = m.id, offset = labelOffsets[key] || [16, -42 - i * 42];
+    const a = w2s(m.from), b = w2s(m.to);
+    const anchor = [(a[0]+b[0])/2, (a[1]+b[1])/2];
+    const rounded = v => Math.round(v * 100) / 100;
+    const lines = m.centerDistance !== null
+      ? [`${m.targetId} · ${t('Center distance')} ${rounded(m.centerDistance)} ${t('mm')}`, `${t('Edge clearance')} ${rounded(m.clearance)} ${t('mm')}`]
+      : [`${m.targetId} · ${t('Clearance')} ${rounded(m.clearance)} ${t('mm')}`];
+    const width = Math.max(...lines.map(line=>ctx.measureText(line).width)) + 12;
+    const height=lines.length*16+6;
+    const x = Math.max(4, Math.min(canvas.clientWidth-width-4, anchor[0]+offset[0]));
+    const y = Math.max(22, Math.min(canvas.clientHeight-height-20, anchor[1]+offset[1]));
+    ctx.strokeStyle = '#76d9b0'; ctx.setLineDash([3,3]); ctx.beginPath();
+    ctx.moveTo(...a); ctx.lineTo(...b); ctx.moveTo(...anchor); ctx.lineTo(x, y-5); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(17,49,41,.96)'; ctx.fillRect(x-4,y-15,width,height);
+    ctx.strokeStyle = selectedMeasurement === key ? '#c3ffe7' : '#347b62'; ctx.strokeRect(x-4,y-15,width,height);
+    ctx.fillStyle = '#a5ecd0'; lines.forEach((line,j)=>ctx.fillText(line,x+2,y+j*16));
+    dimBoxes.push({ x:x-4,y:y-15,w:width,h:height, measurement:m, labelKey:key, offset:offset.slice(), entity:e });
+  });
+  ctx.restore();
+}
+function drawSnapTarget() {
+  if (!snapTarget) return;
+  const p = w2s(snapTarget.point);
+  ctx.save(); ctx.strokeStyle = '#6df0b4'; ctx.fillStyle = '#6df0b4'; ctx.lineWidth = 1.5;
+  if (pending && ['perpendicular','tangent'].includes(snapTarget.kind)) {
+    ctx.setLineDash([5,4]); ctx.beginPath(); ctx.moveTo(...w2s(pending.start)); ctx.lineTo(...p); ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.strokeRect(p[0]-6,p[1]-6,12,12); ctx.font = '12px system-ui';
+  ctx.fillText(t(snapTarget.kind),p[0]+12,p[1]-12); ctx.restore();
 }
 
 // ---- picking ----
@@ -195,7 +278,7 @@ function entityAt(screen) {
   const p = s2w(screen);
   let best = null, bestD = PICK_TOL / view.s;
   for (const e of doc.entities) {
-    const center = e.type === 'line' ? [(e.p1[0] + e.p2[0])/2, (e.p1[1] + e.p2[1])/2] : e.c;
+    const center = centerOf(e);
     const d = Math.min(distanceToEntity(p, e), Math.hypot(p[0] - center[0], p[1] - center[1]));
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -219,7 +302,13 @@ canvas.addEventListener('pointerdown', ev => {
   const s = evPos(ev);
   if (tool === 'select' && ev.button === 0 && pointers.size === 0) {
     const box = dimensionAt(s);
-    if (box) { ev.preventDefault(); openDimension(box); return; }
+    if (box) {
+      ev.preventDefault();
+      if (!box.measurement) { openDimension(box); return; }
+      selectedMeasurement = box.labelKey;
+      drag = { mode:'label', box, screen:s, pointerId:ev.pointerId };
+      canvas.setPointerCapture(ev.pointerId); pointers.set(ev.pointerId,s); draw(); return;
+    }
   }
   canvas.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, s);
@@ -249,7 +338,7 @@ canvas.addEventListener('pointerdown', ev => {
 
 canvas.addEventListener('pointermove', ev => {
   const s = evPos(ev);
-  mouse = s2w(s);
+  mouse = drawingPoint(s2w(s));
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, s);
   if (pinch && pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -271,6 +360,9 @@ canvas.addEventListener('pointermove', ev => {
   if (drag.mode === 'pan') {
     view.ox = drag.ox + (s[0] - drag.start[0]);
     view.oy = drag.oy + (s[1] - drag.start[1]);
+  } else if (drag.mode === 'label') {
+    if (!drag.undoPushed) { pushUndo(); drag.undoPushed = true; }
+    labelOffsets[drag.box.labelKey] = drag.box.offset.map((v,i) => v+s[i]-drag.screen[i]);
   } else if (drag.mode === 'grip') {
     if (!drag.undoPushed) { pushUndo(); drag.undoPushed = true; }
     try { drag.grip.set(mouse); } catch { drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
@@ -284,7 +376,7 @@ canvas.addEventListener('pointermove', ev => {
 
 function endPointer(ev) {
   if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
-      Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10) canvasClick(s2w(evPos(ev)));
+      Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10) canvasClick(drawingPoint(s2w(evPos(ev))));
   toolTap = null;
   pointers.delete(ev.pointerId);
   if (pointers.size < 2) pinch = null;
@@ -318,7 +410,7 @@ let dimensionBox = null;
 const dimensionDialog = document.getElementById('dimension-dialog');
 function openDimension(box) {
   dimensionBox = box;
-  document.getElementById('dimension-title').textContent = `${box.entity.id}: ${box.dim.key}`;
+  document.getElementById('dimension-title').textContent = `${box.entity.id}: ${t(box.dim.key)}`;
   const input = document.getElementById('dim-edit');
   input.value = String(box.dim.value);
   document.getElementById('dimension-error').hidden = true;
@@ -331,7 +423,7 @@ document.getElementById('dimension-form').addEventListener('submit', ev => {
   if (!dimensionBox || !doc.entities.includes(dimensionBox.entity)) { dimensionDialog.close(); return; }
   if (!Number.isFinite(v) || v <= 0 || v > 1e6) {
     const error = document.getElementById('dimension-error');
-    error.textContent = 'Enter a positive value up to 1,000,000 mm.'; error.hidden = false; return;
+    error.textContent = t('Enter a positive value up to 1,000,000 mm.'); error.hidden = false; return;
   }
   if (v !== dimensionBox.dim.value) {
     pushUndo();
@@ -349,20 +441,22 @@ window.addEventListener('keydown', ev => {
   const k = ev.key.toLowerCase();
   if ((ev.ctrlKey || ev.metaKey) && k === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); redo(); }
+  else if ((ev.ctrlKey || ev.metaKey) && k === 'c') { if (copySelection()) ev.preventDefault(); }
+  else if ((ev.ctrlKey || ev.metaKey) && k === 'v') { if (clipboard) { ev.preventDefault(); pasteSelection(); } }
   else if (k === 'escape') { pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
     ev.preventDefault();
     deleteSelection();
   }
-  else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && { v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]);
+  else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && { v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc', b: 'bezier', t:'text' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc', b: 'bezier', t:'text' }[k]);
 });
 
 // ---- toolbar / statusbar ----
-function setTool(t) { tool = t; pending = null;
+function setTool(t) { tool = t; pending = null; snapTarget = null;
   document.querySelectorAll('#draw-tools .tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   canvas.classList.toggle('selecting', t === 'select');
   draw();
-  setHint(t === 'select' ? '' : 'Click the ' + (t === 'line' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
+  setHint(t === 'select' ? '' : t === 'text' ? 'Click to place text' : 'Click the ' + (t === 'line' || t === 'bezier' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
 }
 document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.getElementById('undo').addEventListener('click', undo);
@@ -373,8 +467,45 @@ function deleteSelection() {
   pending = null; refreshTimeline(); draw();
 }
 document.getElementById('delete-selected').addEventListener('click', deleteSelection);
+function copySelection() {
+  const entity = doc.entities.find(e => e.id === doc.selectedId);
+  if (!entity) return false;
+  clipboard = JSON.parse(JSON.stringify(entity)); pasteCount = 0; draw();
+  setHint('Copied. Paste creates an offset copy.'); return true;
+}
+function pasteSelection() {
+  if (!clipboard) return;
+  const e = JSON.parse(JSON.stringify(clipboard));
+  try {
+    const offset = 24 / view.s * (pasteCount + 1);
+    moveEntity(e, [offset, -offset]);
+    const op = { op:e.type, from:e.p1, to:e.p2, control1:e.c1, control2:e.c2, center:e.c, radius:e.r ?? e.R,
+      width:e.w, height:e.h, start:e.a0, end:e.a1, sides:e.n, points:e.n, innerRatio:e.ratio, rotation:e.rot,
+      at:e.c,text:e.text,size:e.size };
+    const before = snapshot(); cancelDesignRequest();
+    const { created } = applyOps(doc,[op]);
+    undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0;
+    pasteCount++; doc.selectedId = created[0]; pending = null; refreshTimeline(); draw();
+  } catch { addMsg('err','That copy is outside the supported drawing range.'); }
+}
+document.getElementById('copy-selected').addEventListener('click',copySelection);
+document.getElementById('paste-selected').addEventListener('click',pasteSelection);
+document.getElementById('snap-toggle').addEventListener('click', () => {
+  snapEnabled = !snapEnabled; snapTarget = null;
+  document.getElementById('snap-toggle').setAttribute('aria-pressed',String(snapEnabled));
+  document.getElementById('snap-toggle').classList.toggle('active',snapEnabled); draw();
+});
+document.getElementById('measurements-toggle').addEventListener('click', () => {
+  measurementsEnabled = !measurementsEnabled;
+  document.getElementById('measurements-toggle').setAttribute('aria-pressed',String(measurementsEnabled));
+  document.getElementById('measurements-toggle').classList.toggle('active',measurementsEnabled); draw();
+});
 function exportDrawing(format) {
-  try { download('design.' + format, format === 'dxf' ? toDXF(doc) : toSVG(doc), format === 'dxf' ? 'application/dxf' : 'image/svg+xml'); }
+  try {
+    download('design.' + format, format === 'dxf' ? toDXF(doc) : toSVG(doc), format === 'dxf' ? 'application/dxf' : 'image/svg+xml');
+    if (format === 'dxf' && doc.entities.some(e => e.type === 'bezier')) addMsg('ai','DXF Bézier curves are approximated by polylines. SVG curves are exact.');
+    if (doc.entities.some(e=>e.type==='text')) addMsg('ai','Text exports as editable text, not outlined cutting paths.');
+  }
   catch { addMsg('err', 'Export failed: the drawing contains invalid geometry. Undo the last edit and try again.'); }
 }
 document.getElementById('export-dxf').addEventListener('click', () => exportDrawing('dxf'));
@@ -382,7 +513,8 @@ document.getElementById('export-svg').addEventListener('click', () => exportDraw
 
 const hintEl = document.getElementById('hint');
 const DEFAULT_HINT = hintEl.textContent;
-function setHint(t) { hintEl.textContent = t || DEFAULT_HINT; }
+let currentHint = '';
+function setHint(text) { currentHint = text; hintEl.textContent = t(text || DEFAULT_HINT); }
 let coordQueued = false;
 function requestCoords() {
   if (coordQueued) return;
@@ -390,23 +522,24 @@ function requestCoords() {
   requestAnimationFrame(() => {
     coordQueued = false;
     document.getElementById('coords').textContent =
-      mouse.map(v => (Math.round(v * 10) / 10)).join(', ') + ' mm';
+      mouse.map(v => (Math.round(v * 10) / 10)).join(', ') + ' ' + t('mm');
   });
 }
 
 // ---- timeline UI ----
+const translateTimeline = text => t(text);
 function refreshTimeline() {
   const ul = document.getElementById('timeline');
   ul.innerHTML = '';
   doc.timeline.forEach((t, i) => {
     const li = document.createElement('li');
     if (t.source === 'ai') li.classList.add('ai-op');
-    const label = document.createElement('span'); label.textContent = `${i + 1}. ${t.text}`;
-    const source = document.createElement('span'); source.className = 'src'; source.textContent = t.source;
+    const label = document.createElement('span'); label.textContent = `${i + 1}. ${translateTimeline(t.text)}`;
+    const source = document.createElement('span'); source.className = 'src'; source.textContent = translateTimeline(t.source);
     li.append(label, source);
     if (t.ids.length && t.ids.every(id => doc.entities.some(e => e.id === id))) {
       const b = document.createElement('button');
-      b.textContent = 'select';
+      b.textContent = translateTimeline('select');
       b.addEventListener('click', () => { doc.selectedId = t.ids[0]; draw(); });
       li.appendChild(b);
     }
@@ -481,26 +614,51 @@ function wireDialog(dialog, closeIds) {
 const rememberSettingsFocus = wireDialog(dlg, ['settings-close', 'settings-cancel']);
 wireDialog(dimensionDialog, ['dimension-close', 'dimension-cancel']);
 dimensionDialog.addEventListener('close', () => { dimensionBox = null; canvas.focus({ preventScroll: true }); });
+let textPosition=null;
+const textDialog=document.getElementById('text-dialog');
+wireDialog(textDialog,['text-close','text-cancel']);
+textDialog.addEventListener('close',()=>{textPosition=null;canvas.focus({preventScroll:true});});
+document.getElementById('text-form').addEventListener('submit',ev=>{
+  ev.preventDefault(); if(!textPosition)return;
+  const text=document.getElementById('text-content').value;
+  const size=Number(document.getElementById('text-size').value);
+  try {
+    const before=snapshot();
+    const {created}=applyOps(doc,[{op:'text',at:textPosition,text,size}]);
+    cancelDesignRequest(); undoStack.push(before); if(undoStack.length>100)undoStack.shift();redoStack.length=0;
+    doc.selectedId=created[0];textDialog.close();refreshTimeline();draw();
+  } catch {
+    const error=document.getElementById('text-error');
+    error.textContent=t('Enter 1–120 characters on one line and a positive text size up to 1,000,000 mm.');error.hidden=false;
+  }
+});
 
 // ---- per-tab connection; intentionally never persisted ----
 try { localStorage.removeItem('vectorforge.connection'); sessionStorage.removeItem('vectorforge.connection'); } catch { /* Storage may be blocked. */ }
-let connection = { ...DEFAULTS, relay: RELAY, useRelay: true, key: '' };
+let connection = { ...DEFAULTS, mode:'server', relay: RELAY, useRelay: true, key: '' };
 const connLight = document.getElementById('conn-light');
 let connState = 'off';
+let connDetail = null;
 let activeRequest = null;
 const history = [];
 const chatLog = document.getElementById('chat-log');
+const messageEntries = [];
 function setConn(state, detail) {
   connState = state; connLight.className = state;
-  connLight.title = detail || { off: 'Not connected. Paste your API key.', checking: 'Checking connection…', on: 'Connected', error: 'Connection failed. Open API to retry.' }[state];
+  connDetail = detail;
+  connLight.title = t(detail || { off: 'Not connected. Open API settings.', ready:'Server connection ready. Provider will be checked on your first request.', checking: 'Checking connection…', on: 'Connected', error: 'Connection failed. Open API to retry.' }[state]);
   connLight.setAttribute('aria-label', connLight.title);
 }
-function addMsg(cls, text, who) {
+function addMsg(cls, text, who, translate = true) {
   const div = document.createElement('div'); div.className = 'msg ' + cls;
   const label = document.createElement('span'); label.className = 'who';
-  label.textContent = who || (cls === 'user' ? 'you >' : cls === 'err' ? 'error >' : 'ai >');
+  const labelText = who || (cls === 'user' ? 'you >' : cls === 'err' ? 'error >' : 'ai >');
+  label.textContent = t(labelText);
   div.appendChild(label);
-  div.appendChild(document.createTextNode(String(text).replace(/sk-[A-Za-z0-9._-]{6,}/g, '[redacted]')));
+  const safeText = String(text).replace(/sk-[A-Za-z0-9._-]{6,}/g, '[redacted]');
+  const body = document.createTextNode(cls !== 'user' && translate ? t(safeText) : safeText);
+  div.appendChild(body);
+  messageEntries.push({label, labelText, body, safeText, translate:cls !== 'user' && translate});
   chatLog.appendChild(div); chatLog.scrollTop = chatLog.scrollHeight; return div;
 }
 function setBusy(busy) {
@@ -512,7 +670,7 @@ function cancelRequest(message = 'Request stopped. Nothing from it was applied.'
   if (!activeRequest) return;
   const request = activeRequest; activeRequest = null;
   request.controller.abort(); request.thinking?.remove();
-  if (request.kind === 'connect') setConn('off');
+  if (request.kind === 'connect' || request.kind === 'health') setConn('off');
   setBusy(false);
   if (message) addMsg('ai', message);
 }
@@ -521,6 +679,8 @@ function cancelDesignRequest() {
 }
 document.getElementById('cancel-request').addEventListener('click', () => cancelRequest());
 const ERRORS = {
+  server_configuration: 'The saved server key is not configured. Try your own API key in API settings.',
+  mode_credentials: 'The connection mode and credentials do not match. Check API settings.',
   origin: 'The relay rejected this website origin. Its allowed origins must include this app.',
   request: 'The relay rejected the request format. Check that the app and relay versions match.',
   scene_required: 'The relay could not read the drawing scene. Check that the app and relay versions match.',
@@ -547,7 +707,7 @@ async function testConnection(config) {
   const request = { kind: 'connect', controller: new AbortController() };
   activeRequest = request; setBusy(true); setConn('checking');
   try {
-    await askAgent(config, { question: 'connection_check', history: [], scene: { units: 'mm', entities: [] } }, request.controller.signal);
+    await askAgent(config, { question: 'connection_check', language:getLanguage(), history: [], scene: { units: 'mm', entities: [] } }, request.controller.signal);
     if (activeRequest !== request) return;
     setConn('on', 'Connected to ' + config.model);
     addMsg('ai', `Connected to ${config.model}. Describe a design, or use the drawing tools.`);
@@ -556,13 +716,36 @@ async function testConnection(config) {
     setConn('error'); addMsg('err', 'Connection test failed. ' + errorText(error));
   } finally { if (activeRequest === request) { activeRequest = null; setBusy(false); } }
 }
+async function checkServerConnection() {
+  const request = {kind:'health',controller:new AbortController()};
+  activeRequest=request; setBusy(true); setConn('checking');
+  const timer=setTimeout(()=>request.controller.abort(),10000);
+  try {
+    const status=await readRelayStatus(connection,request.controller.signal);
+    if (activeRequest!==request) return;
+    if (!status.serverConfigured) throw Error('server_configuration');
+    connection.model=status.serverModel || DEFAULTS.model;
+    setConn('ready');
+  } catch(error) {
+    if(activeRequest!==request) return;
+    setConn('error'); addMsg('err',errorText(error));
+  } finally { clearTimeout(timer); if(activeRequest===request) {activeRequest=null;setBusy(false);} }
+}
+function syncConnectionMode() {
+  const server = document.getElementById('set-mode').value === 'server';
+  for (const id of ['set-base','set-model','set-key','set-relay']) document.getElementById(id).disabled=server;
+  if (server) document.getElementById('set-key').value='';
+}
+document.getElementById('set-mode').addEventListener('change',syncConnectionMode);
 document.getElementById('settings-btn').addEventListener('click', () => {
   rememberSettingsFocus();
+  document.getElementById('set-mode').value=connection.mode;
   for (const name of ['base', 'model']) document.getElementById('set-' + name).value = connection[name];
   document.getElementById('set-key').value = '';
   document.getElementById('set-relay-url').value = connection.relay;
   document.getElementById('set-relay').checked = connection.useRelay;
   document.getElementById('settings-error').hidden = true;
+  syncConnectionMode();
   openDialog(dlg, document.getElementById('settings-close'));
 });
 dlg.addEventListener('close', () => { document.getElementById('set-key').value = ''; });
@@ -570,13 +753,14 @@ document.getElementById('settings-form').addEventListener('submit', ev => {
   ev.preventDefault();
   let config;
   try { config = validateConnection({
+    mode: document.getElementById('set-mode').value,
     base: document.getElementById('set-base').value.trim() || DEFAULTS.base,
     model: document.getElementById('set-model').value.trim() || DEFAULTS.model,
     key: document.getElementById('set-key').value.trim() || connection.key,
     relay: document.getElementById('set-relay-url').value.trim() || RELAY,
     useRelay: document.getElementById('set-relay').checked,
   }); } catch (error) {
-    const feedback = document.getElementById('settings-error'); feedback.textContent = errorText(error); feedback.hidden = false; return;
+    const feedback = document.getElementById('settings-error'); feedback.textContent = t(errorText(error)); feedback.hidden = false; return;
   }
   dlg.close(); addMsg('ai', 'Checking the connection…'); testConnection(config);
 });
@@ -592,23 +776,26 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   const keyMatch = /^(?:key|api[- ]?key)?\s*[:=]?\s*(sk-[\w.\-]{6,})$/i.exec(q);
   if (keyMatch) {
     input.value = '';
-    try { const config = validateConnection({ ...connection, key: keyMatch[1] }); addMsg('ai', 'Key received for this tab only. Checking the connection…'); testConnection(config); }
+    try { const config = validateConnection({ ...connection, mode:'byok', key: keyMatch[1] }); addMsg('ai', 'Key received for this tab only. Checking the connection…'); testConnection(config); }
     catch (error) { addMsg('err', errorText(error)); }
     return;
   }
   // Never echo or send a secret pasted as part of a larger command.
   if (/sk-/i.test(q)) { input.value = ''; addMsg('err', 'Paste the API key by itself or use API settings. The text was not sent or displayed.'); return; }
   if (activeRequest) { addMsg('err', 'A request is running. Wait, or use Stop first.'); return; }
-  if (connState !== 'on') { addMsg('err', 'Paste your API key or open API to connect first. Manual drawing and export work offline.'); return; }
+  if (connState !== 'on' && connState !== 'ready') { addMsg('err', 'Open API settings to connect. Manual drawing and export work offline.'); return; }
   if (q.length > 1600) { addMsg('err', 'Keep the design request under 1,600 characters.'); return; }
   input.value = ''; addMsg('user', q);
   const request = { kind: 'design', controller: new AbortController(), thinking: addMsg('ai', 'Working…') };
-  const scene = serializeScene(doc), sceneBefore = JSON.stringify(scene);
+  // Freeze submitted selection in scene; selection/pan/zoom during a request
+  // must not discard it. Only geometry changes invalidate this snapshot.
+  const scene = serializeScene(doc), sceneBefore = JSON.stringify(doc.entities);
   activeRequest = request; setBusy(true);
   try {
-    const result = await askAgent(connection, { question: q, history, scene }, request.controller.signal);
+    const result = await askAgent(connection, { question: q, history, scene, language:getLanguage() }, request.controller.signal);
     if (activeRequest !== request) return;
-    if (JSON.stringify(serializeScene(doc)) !== sceneBefore) { cancelRequest('The selection or drawing changed. Send the request again for the current scene.'); return; }
+    setConn('on', 'Connected to ' + connection.model);
+    if (JSON.stringify(doc.entities) !== sceneBefore) { cancelRequest('The selection or drawing changed. Send the request again for the current scene.'); return; }
     // Validate/apply atomically before recording success, and avoid cancelling ourselves.
     activeRequest = null;
     if (result.ops.length) {
@@ -618,7 +805,7 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
       if (created.length) doc.selectedId = created.at(-1);
       refreshTimeline(); draw();
     }
-    request.thinking.remove(); addMsg('ai', result.reply);
+    request.thinking.remove(); addMsg('ai', result.reply, null, false);
     history.push({ role: 'user', content: q }, { role: 'assistant', content: result.reply });
     if (history.length > 12) history.splice(0, history.length - 12);
   } catch (error) {
@@ -630,10 +817,22 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
 });
 
 // ---- boot ----
+document.getElementById('language-select').addEventListener('change', ev => {
+  setLanguage(ev.target.value); applyTranslations(document); setHint(currentHint);
+  refreshTimeline(); setConn(connState, connDetail);
+  for (const entry of messageEntries) {
+    entry.label.textContent = t(entry.labelText);
+    entry.body.textContent = entry.translate ? t(entry.safeText) : entry.safeText;
+  }
+  if (dimensionBox) document.getElementById('dimension-title').textContent = `${dimensionBox.entity.id}: ${t(dimensionBox.dim.key)}`;
+  draw();
+});
+applyTranslations(document);
 view.ox = canvas.clientWidth / 2 || 500;
 view.oy = canvas.clientHeight / 2 || 400;
 window.addEventListener('blur', () => { drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(canvas);
 resize(); refreshTimeline(); setTool('select');
-addMsg('ai', 'VectorForge ready. Paste your Qwen API key by itself to connect for this tab only. Keys pass through the CAD relay to Alibaba. Or draw offline with the tools below.');
+addMsg('ai', 'VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Your own key is optional in API. Manual drawing and export work offline.');
+checkServerConnection();
