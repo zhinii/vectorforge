@@ -247,3 +247,60 @@ test('editable text dimensions preserve English size schema and translate only t
   assert.deepEqual(parseResponse(JSON.stringify({ reply: 'Font size prepared.', ops: [op] })).ops, [op]);
   setLanguage('zh'); assert.equal(t('e1 size = 20 mm'), 'e1 字号 = 20 毫米'); setLanguage('en');
 });
+
+test('workflow UI literals have bilingual coverage without exposing raw preflight codes', () => {
+  const workflow = readFileSync(new URL('../js/workflow.mjs', import.meta.url), 'utf8');
+  for (const [, key] of workflow.matchAll(/\bt\('([^']+)'/g)) {
+    if (key === 'check.' || key === 'severity.') continue; // Runtime suffixes checked below.
+    assert.ok(Object.hasOwn(catalogs.en, key), `Missing English workflow text: ${key}`);
+    assert.ok(Object.hasOwn(catalogs.zh, key), `Missing Chinese workflow text: ${key}`);
+  }
+  const preflight = readFileSync(new URL('../js/preflight.mjs', import.meta.url), 'utf8');
+  for (const [, code] of preflight.matchAll(/\badd\('([^']+)'/g)) {
+    for (const lang of ['en', 'zh']) {
+      setLanguage(lang);
+      assert.ok(Object.hasOwn(catalogs[lang], 'check.' + code), `Missing ${lang} check: ${code}`);
+      assert.notEqual(t('check.' + code), 'check.' + code);
+    }
+  }
+  for (const level of ['error', 'warning', 'info']) for (const lang of ['en', 'zh']) {
+    assert.ok(Object.hasOwn(catalogs[lang], 'severity.' + level));
+  }
+  setLanguage('en');
+});
+
+test('workflow generated timeline text translates only bounded known labels', () => {
+  setLanguage('zh');
+  assert.equal(t('closed path 14 points'), '闭合路径 14 个点');
+  assert.equal(t('open path 2 points'), '开放路径 2 个点');
+  assert.equal(t('update e18 metadata'), '更新 e18 属性');
+  for (const untouched of ['update my-piece metadata', 'open path arbitrary points', 'My closed path 14 points', 'shirt-cut-A', '胸围 98 cm']) {
+    assert.equal(t(untouched), untouched);
+  }
+  assert.equal(t('cut'), '切割');
+  assert.equal(t('engrave'), '雕刻');
+  assert.equal(t('reference'), '参考');
+  setLanguage('en');
+  assert.equal(t('closed path 14 points'), 'closed path 14 points');
+  assert.equal(t('update e18 metadata'), 'update e18 metadata');
+  assert.ok(Object.isFrozen(catalogs.en));
+  assert.ok(Object.isFrozen(catalogs.zh));
+});
+
+test('reference scale and fabrication limitations are translated with their meaning intact', async () => {
+  const { preflight } = await import('../js/preflight.mjs');
+  setLanguage('zh');
+  for (const key of preflight({ entities: [] }).limitations) {
+    assert.ok(Object.hasOwn(catalogs.zh, key), `Missing limitation: ${key}`);
+    assert.notEqual(t(key), key);
+  }
+  for (const key of [
+    'Scale calibrated from a user-confirmed measurement. Perspective is not corrected.',
+    'Scale is unverified. Calibrate a known length before using measurements.',
+    'Enter the real distance. This rescales only this image and its attached annotations, not existing vector paths.',
+    'This is a user-entered reference annotation, not a driving geometry constraint. Drag its label to reposition.',
+    'Tap the note position on the image.',
+    'Tap two points on the image. Escape cancels.',
+  ]) assert.notEqual(t(key), key);
+  setLanguage('en');
+});

@@ -7,6 +7,7 @@ import * as agent from '../js/agent.mjs';
 import * as dxf from '../js/dxf.mjs';
 import * as i18n from '../js/i18n.mjs';
 import * as spatial from '../js/spatial.mjs';
+import {initWorkflow} from '../js/workflow.mjs';
 
 // DOM contract/event regression harness, not a browser or layout/focus-trap test.
 // Production code is unchanged. Test-only read access is appended in a VM copy.
@@ -66,13 +67,13 @@ function setup({ deferredHealth = false, quickTimeout = false } = {}) {
       if (!['META', 'LINK', 'INPUT', 'BR', 'HR', 'IMG'].includes(el.tagName)) stack.push(el);
     } else if (token[4]) stack.at(-1)._text += token[4];
   }
-  document.getElementById = id => { assert.ok(ids.has(id), `Missing HTML element: ${id}`); return ids.get(id); };
-  document.querySelectorAll = selector => selector === '#draw-tools .tool' ? elements.filter(e => e.dataset.tool) : /^\[data-i18n[^\]]*\]$/.test(selector) ? elements.filter(e => e.getAttribute(selector.slice(1,-1)) !== null) : [];
+  document.getElementById = id => { const find = e => e.id===id?e:e.children.map(find).find(Boolean); const result=ids.get(id)||find(document); assert.ok(result, `Missing HTML element: ${id}`); return result; };
+  document.querySelectorAll = selector => selector === '#draw-tools .tool' ? elements.filter(e => e.dataset.tool) : selector === '[data-workshop]' ? elements.filter(e=>e.dataset.workshop) : /^\[data-i18n[^\]]*\]$/.test(selector) ? elements.filter(e => e.getAttribute(selector.slice(1,-1)) !== null) : [];
   document.querySelector = selector => selector === 'dialog[open]' ? elements.find(e => e.tagName === 'DIALOG' && e.open) || null : null;
   document.createElement = tag => new Element(tag, {}, document);
   document.createTextNode = text => { const el = new Element('#text', {}, document); el.textContent = text; return el; };
   document.documentElement = elements.find(e => e.tagName === 'HTML');
-  const window = new Element('window', {}, document);
+  const window = new Element('window', {}, document); window.Image=class {set src(value){this._src=value;this.naturalWidth=100;this.naturalHeight=100;} get src(){return this._src;}};
   window.innerWidth = 1000; window.innerHeight = 700;
   window.visualViewport = Object.assign(new Element('viewport', {}, document), { width: 1000, height: 700, offsetLeft: 0, offsetTop: 0 });
   window.matchMedia = () => ({ matches: false });
@@ -85,10 +86,10 @@ function setup({ deferredHealth = false, quickTimeout = false } = {}) {
     if (!deferredHealth) {healthCalls.push({url,options});return Promise.resolve(healthResult());}
     return new Promise((resolve,reject)=>{healthCalls.push({url,options,resolve,reject});options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});
   } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
-  const context = vm.createContext({ ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
+  const context = vm.createContext({ initWorkflow, structuredClone, ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
     AbortController, URL, console, setTimeout:(fn,ms)=>setTimeout(fn,quickTimeout && ms===10000 ? 1 : ms), clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
   const source = readFileSync(new URL('../js/main.mjs', import.meta.url), 'utf8').replace(/^import[^]*?from\s+'[^']+';\s*/gm, '');
-  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled });', context, { filename: 'main.mjs' });
+  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled, workflow });', context, { filename: 'main.mjs' });
   const el = id => document.getElementById(id);
   const click = async id => { el(id).focus(); await el(id).dispatch('click'); };
   const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -596,3 +597,12 @@ test('moving cubic control handles are never mistaken for body outline anchors',
   assert.equal(h.state().snapTarget,null);
   for(const key of ['p1','c1','c2','p2']) approxPoint(curve[key],[before[key][0],before[key][1]+14]);
 });
+
+test('workshop opens separate import/template flows, previews before applying, and cancels safely', async()=>{
+  const h=setup();await h.click('workshop-open');assert.equal(h.el('workshop-dialog').open,true);assert.equal(h.el('workshop-import').hidden,false);await h.click('workshop-close');assert.equal(h.el('workshop-dialog').open,false);
+  await h.click('templates-open');assert.equal(h.el('workshop-templates').hidden,false);h.el('template-select').value='keytag';await h.el('template-select').dispatch('change');await h.click('template-preview');assert.equal(h.el('template-result').hidden,false);assert.equal(h.state().doc.entities.length,0);await h.click('template-accept');assert.ok(h.state().doc.entities.some(e=>e.type==='path'&&e.hole));assert.equal(h.el('workshop-dialog').open,false);await h.click('undo');assert.equal(h.state().doc.entities.length,0);
+});
+test('fabrication export requires review and reports unclosed lines before export',async()=>{const h=setup();await h.tool('line');await h.tap(400,300);await h.tap(500,300);await h.click('export-svg');assert.equal(h.el('workshop-checks').hidden,false);assert.equal(h.el('export-reviewed').checked,false);await h.click('checked-svg');assert.equal(h.el('workshop-error').hidden,false);assert.match(h.el('checks-list').textContent,/open|closed|check.open_cut_path/i);});
+test('image annotation chooses two points, preserves vector geometry, and is undoable',async()=>{const h=setup();h.state().doc.references=[{id:'image-1',name:'Paper',dataURL:'data:image/png;base64,AA==',center:[0,0],width:100,height:100,rotation:0,opacity:.5,locked:true,calibrated:false}];await h.click('workshop-open');await h.click('reference-measure');await h.tap(400,300);await h.tap(600,300);assert.equal(h.el('annotation-dialog').open,true);h.el('annotation-value').value='80';h.el('annotation-text').value='known';await h.el('annotation-form').dispatch('submit');assert.equal(h.state().doc.annotations.length,1);assert.equal(h.state().doc.annotations[0].value,80);assert.equal(h.state().doc.references[0].width,100);assert.equal(h.state().doc.entities.length,0);await h.click('undo');assert.equal(h.state().doc.annotations.length,0);});
+test('calibration rescales only the chosen reference and saves an explicit annotation',async()=>{const h=setup();h.state().doc.references=[{id:'image-1',name:'Paper',dataURL:'data:image/png;base64,AA==',center:[0,0],width:100,height:100,rotation:0,opacity:.5,locked:true,calibrated:false}];await h.click('workshop-open');await h.click('reference-calibrate');await h.tap(400,300);await h.tap(600,300);h.el('annotation-value').value='100';await h.el('annotation-form').dispatch('submit');assert.equal(h.state().doc.references[0].width,200);assert.equal(h.state().doc.references[0].calibrated,true);assert.equal(h.state().doc.annotations[0].value,100);});
+test('reference geometry is omitted from AI scenes and complex scene is stopped before network',async()=>{const h=setup();await h.connect();model.applyOps(h.state().doc,[{op:'text',text:'private note',layer:'reference'}]);h.submit('chat-form','draw a circle');await h.tick();const body=JSON.parse(h.requests.at(-1).options.body);assert.doesNotMatch(JSON.stringify(body),/private note/);await h.respond(h.requests.length-1);model.applyOps(h.state().doc,[{op:'path',points:Array.from({length:2000},(_,i)=>[i,i%3]),closed:false}]);const count=h.requests.length;await h.submit('chat-form','draw a square');assert.equal(h.requests.length,count);assert.match(h.log(),/too complex/i);});

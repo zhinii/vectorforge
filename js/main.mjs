@@ -1,14 +1,16 @@
+import { initWorkflow } from './workflow.mjs?v=20261023-9';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles } from './model.mjs?v=20261023-8';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-8';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-8';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261023-8';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-8';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261023-9';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-9';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-9';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261023-9';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-9';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const doc = createDoc();
+let workflow = null;
 
 // ---- view transform (world y-up ↔ screen y-down) ----
 const view = { s: 4, ox: 0, oy: 0 }; // px per mm, screen offset
@@ -26,17 +28,19 @@ function resize() {
 // ---- undo/redo (document snapshots) ----
 const undoStack = [], redoStack = [];
 function snapshot() {
-  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId, labelOffsets });
+  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId, references: doc.references || [], annotations: doc.annotations || [], labelOffsets });
 }
-function pushUndo() { cancelDesignRequest(); undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
+function limitHistory(stack) { let bytes=stack.reduce((n,s)=>n+s.length,0); while(stack.length>1&&(stack.length>100||bytes>24*1024*1024)) bytes-=stack.shift().length; }
+function pushUndo() { cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); redoStack.length = 0; }
 function restore(snap) {
   const d = JSON.parse(snap);
   doc.entities = d.entities; doc.timeline = d.timeline; doc.selectedId = d.selectedId;
   labelOffsets = d.labelOffsets || {};
+  doc.references = d.references || []; doc.annotations = d.annotations || []; workflow?.refresh();
   pending = null; drag = null; refreshTimeline(); draw();
 }
-function undo() { if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); restore(undoStack.pop()); }
-function redo() { if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); restore(redoStack.pop()); }
+function undo() { if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); limitHistory(redoStack); restore(undoStack.pop()); }
+function redo() { if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); restore(redoStack.pop()); }
 
 // ---- interaction state ----
 let tool = 'select';
@@ -46,7 +50,7 @@ let mouse = [0, 0];       // world coords
 let clipboard = null, pasteCount = 0;
 let snapEnabled = true, snapTarget = null;
 let labelOffsets = {}, selectedMeasurement = null, measurementsEnabled = true;
-const centerOf = e => e.p1 ? [(e.p1[0] + e.p2[0])/2, (e.p1[1] + e.p2[1])/2] : e.c;
+const centerOf = e => { if (e.type === 'path') { const pts = entityPoints(e); return [0,1].map(i => (Math.min(...pts.map(p=>p[i])) + Math.max(...pts.map(p=>p[i]))) / 2); } return e.p1 ? [(e.p1[0] + e.p2[0])/2, (e.p1[1] + e.p2[1])/2] : e.c; };
 
 const COARSE = window.matchMedia('(pointer: coarse)').matches;
 const GRIP_TOL = COARSE ? 18 : 7;   // px
@@ -75,7 +79,8 @@ function translationAnchors(e) {
     const angles = e.type === 'arc' ? [start,start+sweep/2,start+sweep] : [0,90,180,270];
     return [e.c.slice(), ...angles.map(a => [e.c[0]+e.r*Math.cos(a*Math.PI/180),e.c[1]+e.r*Math.sin(a*Math.PI/180)])];
   }
-  const points = entityPoints(e).map(p=>p.slice());
+  const rawPoints = entityPoints(e); const stride = Math.max(1, Math.ceil(rawPoints.length / 16));
+  const points = rawPoints.filter((_,i)=>i%stride===0||i===rawPoints.length-1).map(p=>p.slice());
   const count = isClosed(e) ? points.length : points.length-1;
   return [...points, ...Array.from({length:count},(_,i)=>mid(points[i],points[(i+1)%points.length])),
     ...(e.c ? [e.c.slice()] : [])];
@@ -85,7 +90,7 @@ function translationSnap(anchors, offset, entityId) {
   for (const anchor of anchors) {
     const point = anchor.map((v,i)=>v+offset[i]);
     for (const candidate of snapCandidates(point, doc.entities, {
-      scale:view.s, tolerancePx:COARSE ? 18 : 10, excludeIds:[entityId],
+      scale:view.s, tolerancePx:COARSE ? 18 : 10, excludeIds: workflow?.groupMove() && doc.entities.find(e=>e.id===entityId)?.group ? doc.entities.filter(e=>e.group===doc.entities.find(e=>e.id===entityId).group).map(e=>e.id) : [entityId],
     })) {
       // Minimum translation wins; discrete-priority ordering breaks equal
       // distances from the same anchor without attracting to a farther point.
@@ -100,6 +105,7 @@ function translationSnap(anchors, offset, entityId) {
 let pending = null;       // first point / partial params for the active tool
 
 function canvasClick(world) {
+  if (workflow?.clickPoint(world)) return true;
   if (tool === 'select') return false;
   if (tool === 'text') {
     textPosition = world.slice();
@@ -187,6 +193,7 @@ function draw() {
   const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
   drawGrid(W, H);
+  workflow?.drawUnderlay();
   dimBoxes = [];
 
   for (const e of doc.entities) {
@@ -199,13 +206,14 @@ function draw() {
     ctx.beginPath();
     pts.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
     if (isClosed(e)) ctx.closePath();
-    ctx.strokeStyle = sel ? '#ffb84d' : '#dbe2ec';
+    ctx.strokeStyle = sel ? '#ffb84d' : e.layer === 'reference' ? '#637a96' : e.layer === 'engrave' ? '#69c8ef' : '#dbe2ec';
     ctx.lineWidth = sel ? 2 : 1.25;
     ctx.stroke();
   }
   // grips + dimensions of the selected entity (context, per design discussion)
   const sel = doc.entities.find(e => e.id === doc.selectedId);
   if (sel) { drawGrips(sel); drawDimensions(sel); if (measurementsEnabled) drawNearbyDimensions(sel); }
+  workflow?.drawAnnotations();
   drawPreview();
   drawSnapTarget();
   requestCoords();
@@ -265,6 +273,9 @@ function drawDimensions(e) {
 // Measurements are read-only geometry observations, not permanent constraints.
 // Their offsets are screen-space annotations so dragging a label cannot reshape.
 function drawNearbyDimensions(e) {
+  // Pairwise edge-clearance on dense traced contours is quadratic. Keep exact
+  // driving width/height labels; omit optional nearby observations at this size.
+  if (entityPoints(e).length > 256 || doc.entities.reduce((n,item)=>n+entityPoints(item).length,0) > 2000) return;
   const nearby = nearbyMeasurements(e, doc.entities, { limit: Math.max(1, Math.min(3, Math.floor((canvas.clientHeight - 42) / 44))), maxDistance: 180 / view.s });
   ctx.save(); ctx.font = '12px system-ui';
   nearby.forEach((m, i) => {
@@ -340,7 +351,8 @@ function dimensionAt(s) { return dimBoxes.find(b => s[0] >= b.x - 4 && s[0] <= b
 canvas.addEventListener('pointerdown', ev => {
   if (document.querySelector('dialog[open]')) return;
   const s = evPos(ev);
-  if (tool === 'select' && ev.button === 0 && pointers.size === 0) {
+  if (!workflow?.picking() && pointers.size === 0 && workflow?.pointerDown(s, ev)) { ev.preventDefault(); canvas.setPointerCapture(ev.pointerId); return; }
+  if (!workflow?.picking() && tool === 'select' && ev.button === 0 && pointers.size === 0) {
     const box = dimensionAt(s);
     if (box) {
       ev.preventDefault();
@@ -363,7 +375,7 @@ canvas.addEventListener('pointerdown', ev => {
   if (ev.button === 1 || ev.button === 2) { drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
   if (ev.button !== 0 && ev.pointerType !== 'touch') return;
   if (suppressGesture) return;
-  if (tool !== 'select') { toolTap = { id: ev.pointerId, screen: s }; return; }
+  if (tool !== 'select' || workflow?.picking()) { toolTap = { id: ev.pointerId, screen: s }; return; }
   const g = gripAt(s);
   if (g) { drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
   const e = entityAt(s);
@@ -378,6 +390,7 @@ canvas.addEventListener('pointerdown', ev => {
 
 canvas.addEventListener('pointermove', ev => {
   const s = evPos(ev);
+  if (workflow?.pointerMove(s, ev)) return;
   mouse = drawingPoint(s2w(s));
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, s);
   if (pinch && pointers.size === 2) {
@@ -405,14 +418,20 @@ canvas.addEventListener('pointermove', ev => {
     labelOffsets[drag.box.labelKey] = drag.box.offset.map((v,i) => v+s[i]-drag.screen[i]);
   } else if (drag.mode === 'grip') {
     if (!drag.undoPushed) { pushUndo(); drag.undoPushed = true; }
-    try { drag.grip.set(mouse); } catch { drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
+    const original=JSON.parse(JSON.stringify(drag.e));
+    try { drag.grip.set(mouse); assertSceneBudget(doc.entities); } catch { Object.assign(drag.e,original); drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
   } else if (drag.mode === 'move') {
     if (!drag.moved) { pushUndo(); drag.moved = true; }
     try {
       const offset = s2w(s).map((v,i)=>v-drag.start[i]);
       snapTarget = snapEnabled ? translationSnap(drag.anchors, offset, drag.e.id) : null;
       const applied = offset.map((v,i)=>v+(snapTarget?.correction[i] || 0));
-      moveEntity(drag.e, applied.map((v,i)=>v-drag.applied[i]));
+      const delta = applied.map((v,i)=>v-drag.applied[i]);
+      const moving = workflow?.groupMove() && drag.e.group ? doc.entities.filter(e=>e.group===drag.e.group) : [drag.e];
+      // Stage all group members before mutating any live geometry.
+      const staged = moving.map(e=>JSON.parse(JSON.stringify(e))); staged.forEach(e=>moveEntity(e,delta));
+      const updates=new Map(staged.map(e=>[e.id,e]));assertSceneBudget(doc.entities.map(e=>updates.get(e.id)||e));
+      moving.forEach((e,i)=>Object.assign(e,staged[i]));
       drag.applied = applied;
     }
     catch { drag = null; addMsg('err', 'That move is outside the supported drawing range.'); }
@@ -421,6 +440,7 @@ canvas.addEventListener('pointermove', ev => {
 });
 
 function endPointer(ev) {
+  if (workflow?.pointerEnd()) { if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId); return; }
   if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
       Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10) canvasClick(drawingPoint(s2w(evPos(ev))));
   toolTap = null;
@@ -489,7 +509,7 @@ window.addEventListener('keydown', ev => {
   else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); redo(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'c') { if (copySelection()) ev.preventDefault(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'v') { if (clipboard) { ev.preventDefault(); pasteSelection(); } }
-  else if (k === 'escape') { pending = null; doc.selectedId = null; setTool('select'); draw(); }
+  else if (k === 'escape') { workflow?.cancel(); pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
     ev.preventDefault();
     deleteSelection();
@@ -527,10 +547,10 @@ function pasteSelection() {
     moveEntity(e, [offset, -offset]);
     const op = { op:e.type, from:e.p1, to:e.p2, control1:e.c1, control2:e.c2, center:e.c, radius:e.r ?? e.R,
       width:e.w, height:e.h, start:e.a0, end:e.a1, sides:e.n, points:e.n, innerRatio:e.ratio, rotation:e.rot,
-      at:e.c,text:e.text,size:e.size };
+      at:e.c,text:e.text,size:e.size, ...(e.type==='path'?{points:e.points,closed:e.closed}:{}), layer:e.layer,group:e.group,hole:e.hole,name:e.name };
     const before = snapshot(); cancelDesignRequest();
     const { created } = applyOps(doc,[op]);
-    undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0;
+    undoStack.push(before); limitHistory(undoStack); redoStack.length = 0;
     pasteCount++; doc.selectedId = created[0]; pending = null; refreshTimeline(); draw();
   } catch { addMsg('err','That copy is outside the supported drawing range.'); }
 }
@@ -547,6 +567,7 @@ document.getElementById('measurements-toggle').addEventListener('click', () => {
   document.getElementById('measurements-toggle').classList.toggle('active',measurementsEnabled); draw();
 });
 function exportDrawing(format) {
+  if (workflow) { workflow.open('checks'); return; }
   try {
     download('design.' + format, format === 'dxf' ? toDXF(doc) : toSVG(doc), format === 'dxf' ? 'application/dxf' : 'image/svg+xml');
     if (format === 'dxf' && doc.entities.some(e => e.type === 'bezier')) addMsg('ai','DXF Bézier curves are approximated by polylines. SVG curves are exact.');
@@ -671,7 +692,7 @@ document.getElementById('text-form').addEventListener('submit',ev=>{
   try {
     const before=snapshot();
     const {created}=applyOps(doc,[{op:'text',at:textPosition,text,size}]);
-    cancelDesignRequest(); undoStack.push(before); if(undoStack.length>100)undoStack.shift();redoStack.length=0;
+    cancelDesignRequest(); undoStack.push(before); limitHistory(undoStack);redoStack.length=0;
     doc.selectedId=created[0];textDialog.close();refreshTimeline();draw();
   } catch {
     const error=document.getElementById('text-error');
@@ -853,7 +874,8 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   const request = { kind: 'design', controller: new AbortController(), thinking: addMsg('ai', 'Working…') };
   // Freeze submitted selection in scene; selection/pan/zoom during a request
   // must not discard it. Only geometry changes invalidate this snapshot.
-  const scene = serializeScene(doc), sceneBefore = JSON.stringify(doc.entities);
+  const scene = serializeScene({ ...doc, entities: doc.entities.filter(e=>e.layer !== 'reference') }), sceneBefore = JSON.stringify(doc.entities);
+  if (JSON.stringify(scene).length > 12000) { request.thinking.remove(); addMsg('err', 'This scene is too complex for AI. Local editing and export still work.'); return; }
   activeRequest = request; setBusy(true);
   try {
     const result = await askAgent(connection, { question: q, history, scene, language:getLanguage() }, request.controller.signal);
@@ -865,7 +887,7 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
     if (result.ops.length) {
       const before = snapshot();
       const { created } = applyOps(doc, result.ops, 'ai');
-      undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0;
+      undoStack.push(before); limitHistory(undoStack); redoStack.length = 0;
       if (created.length) doc.selectedId = created.at(-1);
       refreshTimeline(); draw();
     }
@@ -889,12 +911,13 @@ document.getElementById('language-toggle').addEventListener('click', () => {
     entry.body.textContent = entry.translate ? t(entry.safeText) : entry.safeText;
   }
   if (dimensionBox) document.getElementById('dimension-title').textContent = `${dimensionBox.entity.id}: ${t(dimensionBox.dim.key)}`;
-  draw();
+  workflow?.language(); draw();
 });
+workflow = initWorkflow({ document, window, doc, canvas, ctx, view, w2s, s2w, pushUndo, draw, refreshTimeline, openDialog, wireDialog, setTool, setHint, addMsg });
 applyTranslations(document);
 view.ox = canvas.clientWidth / 2 || 500;
 view.oy = canvas.clientHeight / 2 || 400;
-window.addEventListener('blur', () => { drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
+window.addEventListener('blur', () => { workflow?.pointerEnd(); drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(canvas);
 resize(); refreshTimeline(); setTool('select');

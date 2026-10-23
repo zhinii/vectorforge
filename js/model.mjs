@@ -2,6 +2,40 @@
 let seq = 0;
 export const nextId = () => 'e' + (++seq);
 export const EPS = 1e-6;
+export const MAX_PATH_POINTS = 4096;
+export const MAX_SCENE_POINTS = 20000;
+export const MAX_SCENE_RENDER_POINTS = 50000;
+export const MAX_SCENE_ENTITIES = 20000;
+export const LAYERS = Object.freeze(['cut', 'engrave', 'reference']);
+export const entityLayer = e => e.layer ?? 'cut';
+function metadata(p, defaults = false) {
+  const result = {};
+  if (p.layer !== undefined || defaults) {
+    const layer = p.layer === undefined ? 'cut' : p.layer;
+    if (!LAYERS.includes(layer)) throw Error('layer must be cut, engrave, or reference');
+    result.layer = layer;
+  }
+  for (const key of ['group', 'name']) if (p[key] !== undefined || (defaults && key === 'group')) {
+    const value = p[key] === undefined ? '' : p[key];
+    if (typeof value !== 'string' || [...value].length > 120 || /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029\uFFFE\uFFFF]/u.test(value))
+      throw Error(`${key} must be a plain string of at most 120 characters`);
+    result[key] = value;
+  }
+  if (p.hole !== undefined || defaults) {
+    if (p.hole !== undefined && typeof p.hole !== 'boolean') throw Error('hole must be boolean');
+    result.hole = p.hole ?? false;
+  }
+  return result;
+}
+export function pathBounds(e) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of e.points) {
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY,
+    center: [minX / 2 + maxX / 2, minY / 2 + maxY / 2] };
+}
 // Keep arithmetic and rendering inside a practical, finite CAD working range.
 export const MAX_VALUE = 1e12;
 export const MAX_TEXT_SIZE = 1e6;
@@ -69,6 +103,14 @@ export function makeEntity(type, p = {}) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Entity parameters must be an object');
   let e;
   switch (type) {
+    case 'path': {
+      if (p.closed !== undefined && typeof p.closed !== 'boolean') throw Error('closed must be boolean');
+      const closed = p.closed ?? false;
+      if (!Array.isArray(p.points) || p.points.length < (closed ? 3 : 2) || p.points.length > MAX_PATH_POINTS)
+        throw Error(`path points must contain ${closed ? 3 : 2}–${MAX_PATH_POINTS} points`);
+      e = { type, points: p.points.map((q, i) => point(q, `points[${i}]`)), closed };
+      break;
+    }
     case 'text': e = { type, c: point(p.at, 'at', [0, 0]), text: validateText(p.text === undefined ? 'Text' : p.text), size: textSize(p.size, 10) }; break;
     case 'line': e = { type, p1: point(p.from, 'from', [0, 0]), p2: point(p.to, 'to', [10, 0]) }; break;
     case 'bezier': e = { type, p1: point(p.from, 'from', [0, 0]),
@@ -91,7 +133,8 @@ export function makeEntity(type, p = {}) {
       break;
     default: throw Error('Unknown entity type: ' + type);
   }
-  return { id: nextId(), ...e };
+  const meta = metadata(p, type === 'path');
+  return { id: nextId(), ...e, ...meta };
 }
 
 // Counterclockwise sweep, including wraparound. Nonzero multiples of 360
@@ -131,6 +174,7 @@ export function bezierPoints(e) {
 }
 export function entityPoints(e) {
   switch (e.type) {
+    case 'path': return e.points;
     case 'text': {
       const { width, ascent, descent } = textMetrics(e);
       return [[e.c[0], e.c[1] - descent], [e.c[0] + width, e.c[1] - descent],
@@ -154,7 +198,50 @@ export function entityPoints(e) {
     default: throw Error('Unknown entity type: ' + e.type);
   }
 }
-export function isClosed(e) { return !['line', 'arc', 'bezier', 'text'].includes(e.type); }
+
+// Count actual rendering expansion, one bounded entity at a time. In
+// particular, a cubic can produce 4097 vertices despite having four controls.
+// This guard never combines the sampled arrays and stops at the first excess.
+export function assertSceneBudget(entities, { validateEntity } = {}) {
+  const limit = () => { const error = Error(`Scene limit: ${MAX_SCENE_ENTITIES} entities, ${MAX_SCENE_POINTS} path points, and ${MAX_SCENE_RENDER_POINTS} expanded geometry points`); error.code = 'SCENE_LIMIT'; return error; };
+  if (!Array.isArray(entities)) throw Error('Invalid scene: entities must be an array');
+  if (entities.length > MAX_SCENE_ENTITIES) throw limit();
+  let points = 0, pathPoints = 0;
+  for (const e of entities) {
+    try {
+      if (!e || typeof e !== 'object') throw Error('Invalid entity');
+      if (validateEntity) validateEntity(e);
+      // Prevent malformed external entities from triggering large primitive
+      // allocations before a count can be obtained. Numeric checks also avoid
+      // worst-case subdivision on invalid cubic controls.
+      if (e.type === 'path') {
+        if (!Array.isArray(e.points) || e.points.length < (e.closed ? 3 : 2) || e.points.length > MAX_PATH_POINTS || typeof e.closed !== 'boolean') throw Error('Invalid path');
+        pathPoints += e.points.length;
+        if (pathPoints > MAX_SCENE_POINTS) throw limit();
+        for (const p of e.points) point(p, 'path point');
+      } else if (e.type === 'bezier' || e.type === 'line') {
+        for (const key of e.type === 'line' ? ['p1', 'p2'] : ['p1', 'c1', 'c2', 'p2']) point(e[key], key);
+      } else {
+        point(e.c, 'center');
+        if (e.type === 'circle' || e.type === 'arc') {
+          positive(e.r, 'radius');
+          if (e.type === 'arc') { number(e.a0, 'start'); number(e.a1, 'end'); }
+        } else if (e.type === 'rect') { positive(e.w, 'width'); positive(e.h, 'height'); }
+        else if (e.type === 'polygon' || e.type === 'star') {
+          count(e.n, 'vertex count', undefined, e.type === 'star' ? 32 : 64);
+          positive(e.R, 'radius'); number(e.rot, 'rotation');
+          if (e.type === 'star' && !(positive(e.ratio, 'innerRatio') < 1)) throw Error('Invalid star inner ratio');
+        } else if (e.type === 'text') { validateText(e.text); textSize(e.size); }
+        else throw Error('Unknown entity type: ' + e.type);
+      }
+      points += entityPoints(e).length;
+      if (points > MAX_SCENE_RENDER_POINTS) throw limit();
+    } catch (error) { error.entityId = e?.id ?? null; throw error; }
+  }
+  return { entities: entities.length, points, pathPoints };
+}
+
+export function isClosed(e) { if (e.type === 'path') return e.closed; return !['line', 'arc', 'bezier', 'text'].includes(e.type); }
 
 // Exact outline distance for circular entities avoids zoom-dependent picking
 // errors caused by a polygonal approximation of a circle or arc.
@@ -186,7 +273,10 @@ export function distanceToEntity(p, e) {
 export function moveEntity(e, d) {
   d = point(d, 'offset');
   const add = p => point([p[0] + d[0], p[1] + d[1]], 'position');
-  if (e.type === 'bezier') {
+  if (e.type === 'path') {
+    const points = e.points.map(add);
+    e.points = points;
+  } else if (e.type === 'bezier') {
     // Validate every new point before mutating, including direct UI moves.
     const points = ['p1', 'c1', 'c2', 'p2'].map(key => add(e[key]));
     [e.p1, e.c1, e.c2, e.p2] = points;
@@ -200,6 +290,8 @@ export function entityGrips(e) {
   const radiusGrip = { kind: 'radius', get: () => [e.c?.[0] + e.r, e.c?.[1]],
     set: p => { p = point(p, 'grip'); e.r = positive(Math.max(EPS, dist(e.c, p)), 'radius'); } };
   switch (e.type) {
+    case 'path': return e.points.map((_, i) => ({ kind: 'vertex', get: () => e.points[i],
+      set: p => { e.points[i] = point(p, 'vertex'); } }));
     case 'text': return [{ kind: 'position', get: () => e.c, set: p => { e.c = point(p, 'at'); } }];
     case 'bezier': return ['p1', 'c1', 'c2', 'p2'].map(key => ({
       kind: key.startsWith('c') ? 'control' : 'endpoint', get: () => e[key],
@@ -237,6 +329,18 @@ export function entityDimensions(e) {
     label: key === 'radius' ? 'R' + r1(value) : r1(value) + ' mm',
     set: v => set(positive(v, key)) });
   switch (e.type) {
+    case 'path': {
+      const b = pathBounds(e);
+      return [['width', 0, [b.center[0], b.minY]], ['height', 1, [b.maxX, b.center[1]]]]
+        .filter(([key]) => b[key] > 0)
+        .map(([key, axis, anchor]) => dimension(key, b[key], anchor, v => {
+          // Recompute after every edit; even sub-EPS nonzero spans are driving.
+          const bounds = pathBounds(e), span = bounds[key], center = bounds.center[axis];
+          if (!(span > 0)) throw Error(`Cannot drive zero-span ${key}`);
+          const points = e.points.map(p => point(p.map((n, i) => i === axis ? center + ((n - center) / span) * v : n), 'scaled point'));
+          e.points = points;
+        }));
+    }
     case 'text': {
       const dim = dimension('size', e.size, [e.c[0], e.c[1] + e.size], v => { e.size = textSize(v); });
       dim.label = 'Font size ' + r1(e.size) + ' mm';
@@ -276,6 +380,8 @@ export function createDoc() { return { entities: [], timeline: [], selectedId: n
 export function serializeScene(doc) {
   return { units: 'mm', entities: doc.entities.map(e => ({
     id: e.id, type: e.type,
+    ...metadata(e),
+    ...(e.type === 'path' ? { points: e.points.map(p => p.slice()), closed: e.closed } : {}),
     ...(e.p1 ? { from: e.p1.slice(), to: e.p2.slice() } : {}),
     ...(e.type === 'bezier' ? { control1: e.c1.slice(), control2: e.c2.slice() } : {}),
     ...(e.c && e.type !== 'text' ? { center: e.c.slice() } : {}),
@@ -295,7 +401,8 @@ export function serializeScene(doc) {
 export function applyOps(doc, ops, source = 'user') {
   if (!Array.isArray(ops)) throw Error('Operations must be an array');
   const staged = { entities: doc.entities.map(e => ({ ...e, ...(e.c ? { c: e.c.slice() } : {}), ...(e.p1 ? { p1: e.p1.slice(), p2: e.p2.slice() } : {}),
-    ...(e.type === 'bezier' ? { c1: e.c1.slice(), c2: e.c2.slice() } : {}) })),
+    ...(e.type === 'bezier' ? { c1: e.c1.slice(), c2: e.c2.slice() } : {}),
+    ...(e.type === 'path' ? { points: e.points.map(p => p.slice()) } : {}) })),
     timeline: doc.timeline.slice(), selectedId: doc.selectedId };
   const beforeSeq = seq;
   const created = [], touched = [];
@@ -312,15 +419,20 @@ export function applyOps(doc, ops, source = 'user') {
         };
         let text, ids = [];
         switch (op.op) {
-          case 'text': case 'line': case 'bezier': case 'circle': case 'arc': case 'rect': case 'polygon': case 'star': {
+          case 'path': case 'text': case 'line': case 'bezier': case 'circle': case 'arc': case 'rect': case 'polygon': case 'star': {
             const e = makeEntity(op.op, op);
             staged.entities.push(e); created.push(e.id); ids = [e.id]; text = describeEntity(e); break;
           }
           case 'move': {
             const e = target(), to = point(op.to, 'to');
-            const ref = e.p1 ? [(e.p1[0] + e.p2[0]) / 2, (e.p1[1] + e.p2[1]) / 2] : e.c;
+            const ref = e.type === 'path' ? pathBounds(e).center : e.p1 ? [(e.p1[0] + e.p2[0]) / 2, (e.p1[1] + e.p2[1]) / 2] : e.c;
             moveEntity(e, [to[0] - ref[0], to[1] - ref[1]]);
             touched.push(e.id); ids = [e.id]; text = `move ${e.id} → (${to})`; break;
+          }
+          case 'set_metadata': {
+            const e = target(), values = metadata(op);
+            if (!Object.keys(values).length) throw Error('No metadata fields provided');
+            Object.assign(e, values); touched.push(e.id); ids = [e.id]; text = `update ${e.id} metadata`; break;
           }
           case 'set_dimension': {
             const e = target(), dim = entityDimensions(e).find(d => d.key === op.dimension);
@@ -335,9 +447,12 @@ export function applyOps(doc, ops, source = 'user') {
           case 'clear': staged.entities = []; staged.selectedId = null; text = 'clear canvas'; break;
           default: throw Error(`Unknown operation: ${String(op.op)}`);
         }
+        if (staged.entities.length > MAX_SCENE_ENTITIES || staged.entities.reduce((n, e) => n + (e.type === 'path' ? e.points.length : 0), 0) > MAX_SCENE_POINTS)
+          throw Error(`Scene limit: ${MAX_SCENE_ENTITIES} entities and ${MAX_SCENE_POINTS} path points`);
         staged.timeline.push({ text, source, ids });
       } catch (error) { throw Error(`Operation ${index + 1}: ${error.message}`); }
     });
+    assertSceneBudget(staged.entities);
   } catch (error) { seq = beforeSeq; throw error; }
   // Preserve object references held by current grips and dimension controls.
   const existing = new Map(doc.entities.map(e => [e.id, e]));
@@ -349,6 +464,7 @@ export function applyOps(doc, ops, source = 'user') {
 }
 function describeEntity(e) {
   switch (e.type) {
+    case 'path': return `${e.closed ? 'closed' : 'open'} path ${e.points.length} points`;
     case 'text': return `text “${e.text}” size ${e.size} at (${e.c})`;
     case 'line': return `line (${e.p1}) → (${e.p2})`;
     case 'bezier': return `Bézier (${e.p1}) → (${e.p2})`;
