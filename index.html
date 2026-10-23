@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VectorForge — AI 2D CAD</title>
-<link rel="stylesheet" href="style.css?v=20261023-2">
+<link rel="stylesheet" href="style.css?v=20261023-3">
 </head>
 <body>
 
-<!-- Rhino-style command console: 3-5 line output + prompt, always on top -->
+<!-- Rhino-style command console: 8-line output + prompt, always on top -->
 <header id="console">
   <div id="chat-log" aria-live="polite"></div>
   <form id="chat-form">
@@ -33,6 +33,7 @@
   <div class="actions">
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
+    <button id="delete-selected" title="Delete selected object (Delete / Backspace)" disabled>Delete</button>
     <button id="timeline-toggle" aria-controls="timeline-panel" aria-expanded="false">Timeline</button>
     <button id="export-svg">SVG</button>
     <button id="export-dxf">DXF</button>
@@ -80,7 +81,7 @@
   </form>
 </dialog>
 
-<script type="module" src="js/main.mjs?v=20261023-2"></script>
+<script type="module" src="js/main.mjs?v=20261023-3"></script>
 </body>
 </html>
 

@@ -1,8 +1,8 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-2';
-import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-2';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-2';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-3';
+import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-3';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-3';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -111,6 +111,7 @@ function drawPreview() {
 function draw() {
   document.getElementById('undo').disabled = !undoStack.length;
   document.getElementById('redo').disabled = !redoStack.length;
+  document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
   const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
   drawGrid(W, H);
@@ -255,11 +256,11 @@ canvas.addEventListener('pointermove', ev => {
     const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
     const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     // pan with the midpoint, zoom by the distance ratio around it
-    const before = s2w(mid);
-    view.s = Math.min(200, Math.max(0.05, view.s * dist / (pinch.dist || dist)));
-    const after = s2w(mid);
-    view.ox += (after[0] - before[0]) * view.s + (mid[0] - pinch.mid[0]);
-    view.oy -= (after[1] - before[1]) * view.s - (mid[1] - pinch.mid[1]);
+    const anchor = s2w(pinch.mid);
+    const ratio = pinch.dist > 0 && dist > 0 ? dist / pinch.dist : 1;
+    view.s = Math.min(200, Math.max(0.05, view.s * ratio));
+    view.ox = mid[0] - anchor[0] * view.s;
+    view.oy = mid[1] + anchor[1] * view.s;
     pinch = { dist, mid };
     draw();
     return;
@@ -294,6 +295,11 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('lostpointercapture', ev => { pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
 canvas.addEventListener('contextmenu', ev => ev.preventDefault());
+// Keep two-finger drawing navigation inside the canvas, including mobile
+// browsers with legacy Touch Events. Browser zoom elsewhere remains enabled.
+for (const type of ['touchstart', 'touchmove']) {
+  canvas.addEventListener(type, ev => ev.preventDefault(), { passive: false });
+}
 
 canvas.addEventListener('wheel', ev => {
   ev.preventDefault();
@@ -346,7 +352,7 @@ window.addEventListener('keydown', ev => {
   else if (k === 'escape') { pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
     ev.preventDefault();
-    if (doc.selectedId) { pushUndo(); applyOps(doc, [{ op: 'delete', id: doc.selectedId }]); doc.selectedId = null; refreshTimeline(); draw(); }
+    deleteSelection();
   }
   else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && { v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]);
 });
@@ -361,6 +367,12 @@ function setTool(t) { tool = t; pending = null;
 document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
+function deleteSelection() {
+  if (!doc.entities.some(e => e.id === doc.selectedId)) return;
+  pushUndo(); applyOps(doc, [{ op: 'delete', id: doc.selectedId }]);
+  pending = null; refreshTimeline(); draw();
+}
+document.getElementById('delete-selected').addEventListener('click', deleteSelection);
 function exportDrawing(format) {
   try { download('design.' + format, format === 'dxf' ? toDXF(doc) : toSVG(doc), format === 'dxf' ? 'application/dxf' : 'image/svg+xml'); }
   catch { addMsg('err', 'Export failed: the drawing contains invalid geometry. Undo the last edit and try again.'); }
@@ -404,16 +416,41 @@ function refreshTimeline() {
 }
 
 // ---- panels and dialogs ----
+// Fixed overlays follow the visual viewport, not an off-screen layout viewport
+// after mobile page zoom/pan or the on-screen keyboard. Never reset page zoom.
+function syncOverlayViewport() {
+  const viewport = window.visualViewport;
+  const width = viewport?.width || window.innerWidth;
+  const height = viewport?.height || window.innerHeight;
+  const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+  const root = document.documentElement.style;
+  root.setProperty('--overlay-left', (left + width / 2) + 'px');
+  root.setProperty('--overlay-top', (top + height / 2) + 'px');
+  root.setProperty('--overlay-width', Math.max(40, width - 24) + 'px');
+  root.setProperty('--overlay-height', Math.max(40, height - 24) + 'px');
+  const drawerWidth = Math.min(300, Math.max(40, width - 24));
+  const workspaceTop = document.getElementById('workspace').getBoundingClientRect().top;
+  const drawerTop = Math.min(top + height - 52, Math.max(top + 12, workspaceTop + 8));
+  root.setProperty('--drawer-left', (left + width - drawerWidth - 12) + 'px');
+  root.setProperty('--drawer-top', drawerTop + 'px');
+  root.setProperty('--drawer-width', drawerWidth + 'px');
+  root.setProperty('--drawer-height', Math.max(40, top + height - drawerTop - 12) + 'px');
+}
+window.visualViewport?.addEventListener('resize', syncOverlayViewport);
+window.visualViewport?.addEventListener('scroll', syncOverlayViewport);
+window.addEventListener('resize', syncOverlayViewport);
+
 const dlg = document.getElementById('settings-dialog');
 const timelinePanel = document.getElementById('timeline-panel');
 const timelineToggle = document.getElementById('timeline-toggle');
 function setTimeline(open, restoreFocus = true) {
+  if (open) syncOverlayViewport();
   timelinePanel.classList.toggle('open', open);
   timelinePanel.inert = !open;
   timelinePanel.setAttribute('aria-hidden', String(!open));
   timelineToggle.setAttribute('aria-expanded', String(open));
-  if (open) document.getElementById('timeline-close').focus();
-  else if (restoreFocus) timelineToggle.focus();
+  if (open) document.getElementById('timeline-close').focus({ preventScroll: true });
+  else if (restoreFocus) timelineToggle.focus({ preventScroll: true });
 }
 timelineToggle.addEventListener('click', () => setTimeline(!timelinePanel.classList.contains('open')));
 document.getElementById('timeline-close').addEventListener('click', () => setTimeline(false));
@@ -421,14 +458,15 @@ document.addEventListener('pointerdown', ev => {
   if (timelinePanel.classList.contains('open') && !timelinePanel.contains(ev.target) && !timelineToggle.contains(ev.target)) setTimeline(false, false);
 });
 function openDialog(dialog, focus) {
+  syncOverlayViewport();
   pending = null; drag = null; toolTap = null; pointers.clear(); pinch = null;
   setTimeline(false, false); draw();
   if (!dialog.open) dialog.showModal();
-  focus?.focus();
+  focus?.focus({ preventScroll: true });
 }
 function wireDialog(dialog, closeIds) {
   let opener = null, outsideDown = false;
-  dialog.addEventListener('close', () => { opener?.focus(); });
+  dialog.addEventListener('close', () => { opener?.focus({ preventScroll: true }); });
   dialog.addEventListener('pointerdown', ev => {
     const r = dialog.getBoundingClientRect();
     outsideDown = ev.target === dialog && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom);
@@ -440,7 +478,7 @@ function wireDialog(dialog, closeIds) {
 }
 const rememberSettingsFocus = wireDialog(dlg, ['settings-close', 'settings-cancel']);
 wireDialog(dimensionDialog, ['dimension-close', 'dimension-cancel']);
-dimensionDialog.addEventListener('close', () => { dimensionBox = null; canvas.focus(); });
+dimensionDialog.addEventListener('close', () => { dimensionBox = null; canvas.focus({ preventScroll: true }); });
 
 // ---- per-tab connection; intentionally never persisted ----
 try { localStorage.removeItem('vectorforge.connection'); sessionStorage.removeItem('vectorforge.connection'); } catch { /* Storage may be blocked. */ }

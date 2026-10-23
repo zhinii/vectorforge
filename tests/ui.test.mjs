@@ -12,6 +12,7 @@ class Element {
   constructor(tag = 'div', attrs = {}, document) {
     this.tagName = tag.toUpperCase(); this.attrs = attrs; this.ownerDocument = document;
     this.id = attrs.id; this.dataset = {}; this.children = []; this.listeners = new Map();
+    this.style = { values: {}, setProperty(name, value) { this.values[name] = value; } };
     this.value = ''; this.hidden = 'hidden' in attrs; this.inert = 'inert' in attrs;
     this.disabled = false; this.checked = false; this.open = false; this._text = '';
     this.className = attrs.class || ''; this.captures = new Set();
@@ -35,7 +36,7 @@ class Element {
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this); this.parent = null; }
   contains(target) { return target === this || this.children.some(c => c.contains(target)); }
   closest(selector) { return /input|textarea|select/.test(selector) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(this.tagName) ? this : null; }
-  focus() { this.ownerDocument.activeElement = this; }
+  focus(options) { this.focusOptions = options; this.ownerDocument.activeElement = this; }
   select() { this.selected = true; }
   showModal() { this.open = true; this.modalCalls = (this.modalCalls || 0) + 1; }
   close() { if (!this.open) return; this.open = false; this.dispatch('close', { bubbles: false }); }
@@ -67,7 +68,11 @@ function setup() {
   document.querySelector = selector => selector === 'dialog[open]' ? elements.find(e => e.tagName === 'DIALOG' && e.open) || null : null;
   document.createElement = tag => new Element(tag, {}, document);
   document.createTextNode = text => { const el = new Element('#text', {}, document); el.textContent = text; return el; };
-  const window = new Element('window', {}, document); window.matchMedia = () => ({ matches: false });
+  document.documentElement = elements.find(e => e.tagName === 'HTML');
+  const window = new Element('window', {}, document);
+  window.innerWidth = 1000; window.innerHeight = 700;
+  window.visualViewport = Object.assign(new Element('viewport', {}, document), { width: 1000, height: 700, offsetLeft: 0, offsetTop: 0 });
+  window.matchMedia = () => ({ matches: false });
   const storageCalls = [];
   const storage = { removeItem: key => storageCalls.push(['remove', key]), setItem: (...args) => { storageCalls.push(['set', ...args]); } };
   const requests = [];
@@ -248,4 +253,89 @@ test('relay-origin rejection is distinct from a rejected API key', async () => {
   const h = setup(); await h.submit('chat-form', 'sk-testdummy12345');
   h.requests[0].resolve({ ok: false, status: 403, json: async () => ({ error: 'origin' }) }); await h.tick();
   assert.match(h.log(), /rejected this website origin/); assert.doesNotMatch(h.log(), /API key was rejected/); assert.equal(h.state().connState, 'error');
+});
+
+
+test('Delete button follows selection, is undo-safe, and shares keyboard behavior', async () => {
+  const h = setup(); assert.equal(h.el('delete-selected').disabled, true);
+  await h.tool('circle'); await h.tap(500, 350); await h.tap(540, 350);
+  assert.equal(h.el('delete-selected').disabled, false);
+  const before = JSON.stringify(h.state().doc.entities);
+  await h.click('delete-selected'); assert.equal(h.state().doc.entities.length, 0); assert.equal(h.el('delete-selected').disabled, true);
+  assert.equal(h.state().undoStack.length, 2);
+  await h.click('delete-selected'); assert.equal(h.state().undoStack.length, 2);
+  await h.click('undo'); assert.equal(JSON.stringify(h.state().doc.entities), before); assert.equal(h.el('delete-selected').disabled, false);
+  await h.window.dispatch('keydown', { key: 'Delete', target: h.el('canvas') });
+  assert.equal(h.state().doc.entities.length, 0); await h.click('undo');
+  await h.tool('select'); await h.tap(100, 100); assert.equal(h.el('delete-selected').disabled, true);
+});
+
+test('canvas touch gestures block native page zoom, but not gestures elsewhere', async () => {
+  const h = setup();
+  for (const type of ['touchstart', 'touchmove']) {
+    let prevented = false;
+    await h.el('canvas').dispatch(type, { preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    prevented = false;
+    await h.el('chat-input').dispatch(type, { preventDefault() { prevented = true; } });
+    assert.equal(prevented, false);
+  }
+});
+
+test('pinch keeps the prior world midpoint anchored under the moving fingers', async () => {
+  const h = setup();
+  await h.pointer('pointerdown', 400, 300, { pointerType: 'touch', pointerId: 1 });
+  await h.pointer('pointerdown', 500, 300, { pointerType: 'touch', pointerId: 2 });
+  const v = h.state().view, anchor = [(450-v.ox)/v.s,(v.oy-300)/v.s];
+  await h.pointer('pointermove', 550, 320, { pointerType: 'touch', pointerId: 2 });
+  assert.ok(Math.abs(v.ox + anchor[0]*v.s - 475) < 1e-9);
+  assert.ok(Math.abs(v.oy - anchor[1]*v.s - 310) < 1e-9);
+  await h.pointer('pointerup', 400, 300, { pointerType: 'touch', pointerId: 1 });
+  await h.pointer('pointerup', 550, 320, { pointerType: 'touch', pointerId: 2 });
+});
+
+test('floating panels preserve scene transform and restore focus without scrolling', async () => {
+  const h = setup(); await h.tool('circle'); await h.tap(500,350); await h.tap(540,350); await h.tool('select');
+  const before = JSON.stringify(h.state().view);
+  await h.click('settings-btn'); assert.equal(JSON.stringify(h.state().view), before);
+  await h.click('settings-close'); assert.equal(JSON.stringify(h.state().view), before);
+  assert.equal(h.el('settings-btn').focusOptions.preventScroll, true);
+  const b = h.state().dimBoxes[0]; await h.tap(b.x+2,b.y+2);
+  assert.equal(h.el('dim-edit').focusOptions.preventScroll, true);
+  await h.click('dimension-cancel'); assert.equal(JSON.stringify(h.state().view), before);
+  assert.equal(h.el('canvas').focusOptions.preventScroll, true);
+  await h.click('timeline-toggle'); await h.click('timeline-close'); assert.equal(JSON.stringify(h.state().view), before);
+});
+
+test('mobile viewport containment excludes closed drawer without disabling accessible page zoom', () => {
+  const h = setup(); const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /html, body \{[^}]*width: 100%[^}]*overflow: hidden/s);
+  assert.match(css, /#workspace \{[^}]*min-width: 0[^}]*overflow: hidden/s);
+  assert.match(css, /#timeline-panel:not\(\.open\) \{ display: none; \}/);
+  assert.match(css, /dialog \{\s*position: fixed; inset: auto; margin: 0;/);
+  assert.match(css, /\.actions \{ grid-template-columns: repeat\(7, minmax\(0, 1fr\)\); \}/);
+  assert.doesNotMatch(h.html, /user-scalable\s*=\s*no|maximum-scale\s*=/i);
+});
+
+
+test('floating API and Timeline remain in the zoomed visual viewport without moving drawing', async () => {
+  const h = setup(), vv = h.window.visualViewport, css = h.document.documentElement.style.values;
+  const before = JSON.stringify(h.state().view);
+  Object.assign(vv, { width: 300, height: 500, offsetLeft: 120, offsetTop: 80 });
+  await h.click('settings-btn');
+  assert.equal(css['--overlay-left'], '270px'); assert.equal(css['--overlay-top'], '330px');
+  assert.equal(css['--overlay-width'], '276px'); assert.equal(css['--overlay-height'], '476px');
+  vv.height = 250; vv.offsetTop = 180; await vv.dispatch('resize');
+  assert.equal(css['--overlay-top'], '305px'); assert.equal(css['--overlay-height'], '226px');
+  await h.click('settings-close'); await h.click('timeline-toggle');
+  assert.equal(css['--drawer-left'], '132px'); assert.equal(css['--drawer-width'], '276px');
+  assert.equal(JSON.stringify(h.state().view), before);
+  await h.click('timeline-close'); assert.equal(JSON.stringify(h.state().view), before);
+});
+
+
+test('console shows about eight lines with a short-viewport cap and scrollback', () => {
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /#chat-log \{[^}]*height: calc\(1\.5em \* 8 \+ 8px\); max-height: 28dvh; overflow-y: auto;/s);
+  assert.doesNotMatch(css, /#chat-log \{ height: calc\(1\.5em \* 3\)/);
 });
