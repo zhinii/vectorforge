@@ -1,8 +1,8 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-1';
-import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-1';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-1';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-2';
+import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-2';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-2';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -218,7 +218,7 @@ canvas.addEventListener('pointerdown', ev => {
   const s = evPos(ev);
   if (tool === 'select' && ev.button === 0 && pointers.size === 0) {
     const box = dimensionAt(s);
-    if (box) { openDimension(box); return; }
+    if (box) { ev.preventDefault(); openDimension(box); return; }
   }
   canvas.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, s);

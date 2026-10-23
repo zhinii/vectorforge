@@ -46,3 +46,9 @@ test('published HTML and every browser module share one cache-busting release', 
     }
   }
 });
+
+test('opening a dimension on pointerdown suppresses the later native canvas focus', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../js/main.mjs', import.meta.url), 'utf8');
+  assert.match(source, /if \(box\) \{ ev\.preventDefault\(\); openDimension\(box\); return; \}/);
+});
