@@ -1,8 +1,8 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-3';
-import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-3';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-3';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-4';
+import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-4';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-4';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -430,7 +430,9 @@ function syncOverlayViewport() {
   root.setProperty('--overlay-height', Math.max(40, height - 24) + 'px');
   const drawerWidth = Math.min(300, Math.max(40, width - 24));
   const workspaceTop = document.getElementById('workspace').getBoundingClientRect().top;
-  const drawerTop = Math.min(top + height - 52, Math.max(top + 12, workspaceTop + 8));
+  // Prefer the scene edge, but float above it when the keyboard/zoom leaves little height.
+  const drawerMinHeight = Math.min(240, Math.max(40, height - 24));
+  const drawerTop = Math.min(top + height - drawerMinHeight - 12, Math.max(top + 12, workspaceTop + 8));
   root.setProperty('--drawer-left', (left + width - drawerWidth - 12) + 'px');
   root.setProperty('--drawer-top', drawerTop + 'px');
   root.setProperty('--drawer-width', drawerWidth + 'px');
