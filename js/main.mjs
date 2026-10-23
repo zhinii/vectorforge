@@ -738,7 +738,7 @@ async function checkServerConnection() {
     if (!status.serverConfigured) throw Error('server_configuration');
     connection.model=status.serverModel || DEFAULTS.model;
     setConn('ready');
-    addMsg('ai', 'Drawing service ready. Send a drawing command; the first response will verify the AI provider.');
+    addMsg('ai', 'Connected to drawing service. Send a drawing command; the first response will verify the AI provider.');
   } catch(error) {
     if(activeRequest!==request) return;
     setConn('error'); addMsg('err',errorText(timedOut ? new Error('timeout') : error));

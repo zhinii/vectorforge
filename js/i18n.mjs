@@ -2,7 +2,7 @@
 // operation names in model data or user/AI conversation content implicitly.
 export const catalogs = Object.freeze({
   en: Object.freeze({
-  "Drawing service ready. Send a drawing command; the first response will verify the AI provider.": "Drawing service ready. Send a drawing command; the first response will verify the AI provider.",
+  "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.",
   "VectorForge — AI 2D CAD": "VectorForge — AI 2D CAD",
   "Design command or API key": "Design command or API key",
   "command or design request… (paste sk-… key to connect)": "command or design request… (paste sk-… key to connect)",
@@ -202,7 +202,7 @@ export const catalogs = Object.freeze({
   "That text is outside the supported drawing range.": "That text is outside the supported drawing range."
 }),
   zh: Object.freeze({
-  "Drawing service ready. Send a drawing command; the first response will verify the AI provider.": "绘图服务已就绪。请发送绘图指令；首次响应将验证 AI 服务商连接。",
+  "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "已连接绘图服务。请发送绘图指令；首次响应将验证 AI 服务商连接。",
   "VectorForge — AI 2D CAD": "VectorForge — AI 二维 CAD",
   "Design command or API key": "设计指令或 API 密钥",
   "command or design request… (paste sk-… key to connect)": "输入指令或设计需求…（粘贴 sk-… 密钥连接）",

@@ -479,19 +479,19 @@ test('explicit console handshake is singleflight and reports success without pro
   await h.click('connect-btn'); await h.click('conn-light'); h.el('set-relay-url').value='http://localhost:4226/api/cad-chat'; await h.el('settings-form').dispatch('submit');
   assert.equal(h.healthCalls.length,1); assert.notEqual(h.state().connection.relay,'http://localhost:4226/api/cad-chat');
   await h.click('settings-close'); h.healthCalls[0].resolve(h.healthResult()); await h.tick();
-  assert.equal(h.state().connState,'ready'); assert.equal(h.el('connect-btn').hidden,true); assert.match(h.log(),/Drawing service ready/); assert.equal(h.requests.length,0);
-  assert.equal((h.log().match(/Checking the connection/g)||[]).length,1); assert.equal((h.log().match(/Drawing service ready/g)||[]).length,1);
+  assert.equal(h.state().connState,'ready'); assert.equal(h.el('connect-btn').hidden,true); assert.match(h.log(),/Connected to drawing service/); assert.equal(h.requests.length,0);
+  assert.equal((h.log().match(/Checking the connection/g)||[]).length,1); assert.equal((h.log().match(/Connected to drawing service/g)||[]).length,1);
 });
 
 test('settings handshake closes dialog and displays Chinese readiness rather than silent checking', async () => {
   const h=setup({deferredHealth:true}); await h.click('language-toggle'); await h.click('conn-light'); await h.el('settings-form').dispatch('submit');
   assert.equal(h.el('settings-dialog').open,false); assert.equal(h.healthCalls.length,1); assert.equal(h.state().connState,'checking');
-  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.match(h.log(),/绘图服务已就绪/); assert.equal(h.requests.length,0);
+  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.match(h.log(),/已连接绘图服务/); assert.equal(h.requests.length,0);
 });
 
 test('stopped health cannot hide Connect and health failure can retry cleanly', async () => {
   const h=setup({deferredHealth:true}); await h.click('connect-btn'); await h.click('cancel-request');
-  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.equal(h.state().connState,'off'); assert.equal(h.el('connect-btn').hidden,false); assert.doesNotMatch(h.log(),/Drawing service ready/);
+  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.equal(h.state().connState,'off'); assert.equal(h.el('connect-btn').hidden,false); assert.doesNotMatch(h.log(),/Connected to drawing service/);
   await h.click('connect-btn'); h.healthCalls[1].resolve(h.healthResult(200,false)); await h.tick();
   assert.equal(h.state().connState,'error'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.el('connect-btn').disabled,false); assert.match(h.log(),/not configured/);
   await h.click('connect-btn'); h.healthCalls[2].resolve(h.healthResult()); await h.tick(); assert.equal(h.state().connState,'ready'); assert.equal(h.requests.length,0);

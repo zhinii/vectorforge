@@ -165,7 +165,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
   dialog button { min-height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-#conn-light.ready { background: #92a8c9; }
+#conn-light.ready { background: #41cfcc; box-shadow: 0 0 6px #41cfcc88; }
 #settings-dialog select { width: 100%; margin-top: 4px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 16px; }
 
 /* Keep a usable canvas above an open keyboard or at high browser zoom. */
