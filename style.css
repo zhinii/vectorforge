@@ -173,3 +173,18 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
   #chat-log { max-height: 14dvh; }
   #topbar button { min-height: 30px; padding-top: 3px; padding-bottom: 3px; }
 }
+/* Local reference-to-drawing workshop. All panels stay within the visual viewport. */
+.workshop { width: min(700px, var(--overlay-width, 92vw)); }
+.workshop-tabs, .button-row { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+.workshop-tabs { border-bottom:1px solid var(--line); padding-bottom:10px; }
+.workshop section { min-width:0; }
+.workshop select, .workshop input:not([type=checkbox]):not([type=range]):not([type=file]) { width:100%; min-width:0; }
+.workshop select { margin-top:4px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px; font-size:16px; }
+.workshop input[type=range] { width:100%; }
+.field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 12px; }
+.workshop h3 { font-size:14px; margin:18px 0 6px; }
+.workshop canvas { display:block; width:100%; max-height:240px; background:#10131a; border:1px solid var(--line); border-radius:6px; }
+.workshop p, .workshop li { overflow-wrap:anywhere; }
+.error { color:#ffb3bb; }
+#checks-list { max-height:220px; overflow-y:auto; padding-left:20px; }
+@media(max-width:450px) { .workshop-tabs button,.button-row button { white-space:normal; flex:1 1 auto; } }

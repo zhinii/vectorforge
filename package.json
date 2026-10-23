@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs server/relay.test.mjs",
-    "check": "node --check js/main.mjs && node --check js/agent.mjs && node --check js/model.mjs && node --check js/dxf.mjs && node --check js/spatial.mjs && node --check js/i18n.mjs",
+    "check": "for file in js/*.mjs; do node --check \"$file\" || exit 1; done",
     "serve": "python3 -m http.server 4226"
   },
-  "engines": { "node": ">=24" }
+  "engines": {
+    "node": ">=24"
+  }
 }

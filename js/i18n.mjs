@@ -1,7 +1,10 @@
+import { workflowCatalog } from './workflow-i18n.mjs?v=20261023-9';
+
 // Deterministic English / Simplified Chinese UI catalog. Never translate CAD
 // operation names in model data or user/AI conversation content implicitly.
 export const catalogs = Object.freeze({
   en: Object.freeze({
+  ...workflowCatalog.en,
   "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.",
   "VectorForge — AI 2D CAD": "VectorForge — AI 2D CAD",
   "Design command or API key": "Design command or API key",
@@ -202,6 +205,7 @@ export const catalogs = Object.freeze({
   "That text is outside the supported drawing range.": "That text is outside the supported drawing range."
 }),
   zh: Object.freeze({
+  ...workflowCatalog.zh,
   "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "已连接绘图服务。请发送绘图指令；首次响应将验证 AI 服务商连接。",
   "VectorForge — AI 2D CAD": "VectorForge — AI 二维 CAD",
   "Design command or API key": "设计指令或 API 密钥",
@@ -431,6 +435,8 @@ export function t(keyOrEnglish, params = {}) {
   if ((match = /^(?:R)([-+\d.eE]+)$/.exec(key))) return `半径 ${match[1]} 毫米`;
   if (/^[-+\d.eE, ]+ mm$/.test(key)) return key.replace(/ mm$/, ' 毫米');
   if ((match = /^move (e\d+) → \(([-+\d.eE, ]+)\)$/.exec(key))) return `移动 ${match[1]} → (${match[2]})`;
+  if ((match = /^(closed|open) path (\d{1,5}) points$/.exec(key))) return `${match[1] === 'closed' ? '闭合' : '开放'}路径 ${match[2]} 个点`;
+  if ((match = /^update (e\d+) metadata$/.exec(key))) return `更新 ${match[1]} 属性`;
   if ((match = /^delete (e\d+)$/.exec(key))) return `删除 ${match[1]}`;
   if ((match = /^(line|circle|arc|rect|polygon|star|bezier|Bézier) ([-+\d.eER°→×(), ]+|\d+ (?:sides|points) R[-+\d.eE]+|R[-+\d.eE]+ at \([-+\d.eE, ]+\))$/.exec(key))) {
     return t(match[1]) + ' ' + match[2].replace(' sides ', ' 边 ').replace(' points ', ' 角 ').replace(' at ', '，中心 ');
