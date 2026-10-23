@@ -1,6 +1,6 @@
-// Exact, read-only CAD geometry. Coordinates are world units; scale is px/unit.
+// Read-only CAD geometry. Coordinates are world units; scale is px/unit.
 // Curves remain analytic: no sampled circle/arc vertices enter these helpers.
-import { arcAngles, entityPoints, isClosed, dist, normalizeAngle } from './model.mjs?v=20261023-7';
+import { arcAngles, entityPoints, isClosed, dist, normalizeAngle } from './model.mjs?v=20261023-8';
 
 const ANGLE_EPS = 1e-9;
 const finitePoint = p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
@@ -39,9 +39,73 @@ export function projectToSegment(p,a,b) {
   return {point:add(a,mul(v,t)),t,rawT};
 }
 
-/** Exact nearest outline point, including endpoints of a bounded arc. */
-export function nearestPointOnEntity(p,e) {
-  if (!finitePoint(p) || !e || e.type==='bezier') return null;
+// de Casteljau evaluates only the actual curve, never a control-polygon edge.
+function cubicPoint(points,t) {
+  const lerp=(a,b)=>[a[0]*(1-t)+b[0]*t,a[1]*(1-t)+b[1]*t];
+  const a=lerp(points[0],points[1]),b=lerp(points[1],points[2]),c=lerp(points[2],points[3]);
+  return lerp(lerp(a,b),lerp(b,c));
+}
+function splitCubic(points) {
+  const [p0,p1,p2,p3]=points,a=midpoint(p0,p1),b=midpoint(p1,p2),c=midpoint(p2,p3);
+  const d=midpoint(a,b),e=midpoint(b,c),f=midpoint(d,e);
+  return [[p0,a,d,f],[f,e,c,p3]];
+}
+function cubicLowerBound(p,points) {
+  // The whole cubic is in its control hull and within `flatness` of its
+  // finite chord. Both bounds remain valid for loops, cusps and reversals.
+  const xs=points.map(q=>q[0]),ys=points.map(q=>q[1]);
+  const box=Math.hypot(Math.max(0,Math.min(...xs)-p[0],p[0]-Math.max(...xs)),
+    Math.max(0,Math.min(...ys)-p[1],p[1]-Math.max(...ys)));
+  const [a,,,b]=points, chord=dist(p,projectToSegment(p,a,b).point);
+  const flatness=Math.max(...points.slice(1,3).map(q=>dist(q,projectToSegment(q,a,b).point)));
+  return Math.max(box,chord-flatness,0);
+}
+/** Bounded adaptive numerical nearest point, with subpixel distance accuracy. */
+function nearestCubicPoint(p,e,scale=1,maxDistance=Infinity) {
+  const points=[e.p1,e.c1,e.c2,e.p2];
+  if (!points.every(finitePoint)) return null;
+  scale=Number.isFinite(scale)&&scale>0?scale:1;
+  // Floating-point resolution at the drawing's coordinate magnitude is the
+  // useful lower limit; subdivision cannot recover digits already rounded.
+  const roundoff=32*Number.EPSILON*Math.max(...points.flat().map(Math.abs),...p.map(Math.abs),Number.MIN_VALUE);
+  const accuracy=Math.max(.01/scale,roundoff);
+  let best=null,bestDistance=maxDistance;
+  const consider=q=>{
+    const d=dist(p,q);
+    if (d<=bestDistance) {best=q;bestDistance=d;}
+  };
+  const stack=[{points,depth:0,lower:cubicLowerBound(p,points)}];
+  // A hard work/depth cap keeps pointer moves bounded, even for pathological
+  // input. Newton is only an accelerator: subdivision searches other basins.
+  for (let visits=0;stack.length&&visits<4096;visits++) {
+    const node=stack.pop(),qs=node.points;
+    if (node.lower>bestDistance+roundoff || (best&&node.lower>=bestDistance-accuracy)) continue;
+    consider(qs[0]);consider(qs[3]);consider(cubicPoint(qs,.5));
+    let t=projectToSegment(p,qs[0],qs[3]).t;
+    // Local derivatives avoid large absolute-coordinate cancellation.
+    const v=qs.slice(1).map((a,i)=>mul(sub(a,qs[i]),3));
+    for (let step=0;step<8;step++) {
+      const q=cubicPoint(qs,t);consider(q);
+      const velocity=add(add(mul(v[0],(1-t)**2),mul(v[1],2*t*(1-t))),mul(v[2],t*t));
+      const acceleration=mul(add(mul(sub(v[1],v[0]),1-t),mul(sub(v[2],v[1]),t)),2);
+      const offset=sub(q,p),den=dot(velocity,velocity)+dot(offset,acceleration);
+      if (!(den>0) || !Number.isFinite(den)) break;
+      const next=Math.max(0,Math.min(1,t-dot(offset,velocity)/den));
+      if (next===t) break;
+      t=next;
+    }
+    if (node.depth>=48 || (best&&node.lower>=bestDistance-accuracy)) continue;
+    const children=splitCubic(qs).map(points=>({points,depth:node.depth+1,lower:cubicLowerBound(p,points)}));
+    children.sort((a,b)=>b.lower-a.lower);
+    stack.push(...children);
+  }
+  return best?.slice() || null;
+}
+
+/** Analytic primitive outlines; Béziers use bounded numerical minimization. */
+export function nearestPointOnEntity(p,e,{scale=1}={}) {
+  if (!finitePoint(p) || !e) return null;
+  if (e.type==='bezier') return nearestCubicPoint(p,e,scale);
   if (curved(e)) {
     let angle=angleOf(p,e);
     if (dist(p,e.c) === 0) angle=e.type==='arc'?arcAngles(e).start*Math.PI/180:0;
@@ -80,6 +144,7 @@ export function snapCandidates(p,entities,{scale=1,tolerancePx=10,from=null,mode
         e.p1[0]/8+e.c1[0]*3/8+e.c2[0]*3/8+e.p2[0]/8,
         e.p1[1]/8+e.c1[1]*3/8+e.c2[1]*3/8+e.p2[1]/8
       ],'midpoint',e);
+      if (mode==='all'||mode==='nearest') push(nearestCubicPoint(p,e,scale,tolerancePx/scale),'nearest',e);
       continue;
     }
     if (e.c) push(e.c,'center',e);
