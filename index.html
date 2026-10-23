@@ -14,8 +14,9 @@
   <form id="chat-form">
     <span id="conn-light" class="off" title="not connected — paste your API key"></span>
     <span class="prompt">&gt;</span>
-    <input id="chat-input" type="text" placeholder='command or design request… (paste sk-… key to connect)' autocomplete="off">
-    <button type="submit" id="send-btn" title="Send">⏎</button>
+    <input id="chat-input" aria-label="Design command or API key" spellcheck="false" autocapitalize="off" type="text" placeholder='command or design request… (paste sk-… key to connect)' autocomplete="off">
+    <button type="submit" id="send-btn" title="Send" aria-label="Send">⏎</button>
+    <button type="button" id="cancel-request" hidden>Stop</button>
   </form>
 </header>
 
@@ -32,7 +33,7 @@
   <div class="actions">
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
-    <button id="timeline-toggle">Timeline</button>
+    <button id="timeline-toggle" aria-controls="timeline-panel" aria-expanded="false">Timeline</button>
     <button id="export-svg">SVG</button>
     <button id="export-dxf">DXF</button>
     <button id="settings-btn">API</button>
@@ -40,32 +41,46 @@
 </nav>
 
 <main id="workspace">
-  <canvas id="canvas"></canvas>
+  <canvas id="canvas" tabindex="0" aria-label="Drawing canvas"></canvas>
   <div id="statusbar">
     <span id="coords">0, 0 mm</span>
-    <span id="hint">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Double-tap a dimension to type its value</span>
+    <span id="hint">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value</span>
   </div>
 
-  <aside id="timeline-panel">
-    <h2>Timeline</h2>
+  <aside id="timeline-panel" aria-label="Timeline" aria-hidden="true" inert>
+    <div class="panel-heading"><h2>Timeline</h2><button id="timeline-close" aria-label="Close timeline" class="close-btn">×</button></div>
     <ul id="timeline"></ul>
   </aside>
 </main>
 
-<dialog id="settings-dialog">
-  <h2>Qwen API Connection</h2>
-  <p class="note">Same OpenAI-compatible endpoint pattern as the robot simulator. Keys are stored only in this browser (localStorage) and sent only to Alibaba domains.</p>
-  <label>Base URL <input id="set-base" type="text"></label>
-  <label>Model <input id="set-model" type="text"></label>
-  <label>API Key <input id="set-key" type="password" placeholder="sk-..."></label>
-  <label>Relay URL <input id="set-relay-url" type="text" placeholder="https://…/api/cad-chat"></label>
-  <label class="row"><input id="set-relay" type="checkbox"> Use relay (required — Alibaba endpoints block direct browser calls)</label>
-  <menu>
-    <button id="settings-cancel" value="cancel">Cancel</button>
-    <button id="settings-save" value="default">Save</button>
-  </menu>
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+  <form id="settings-form">
+    <div class="panel-heading"><h2 id="settings-title">Qwen API Connection</h2><button type="button" id="settings-close" class="close-btn" aria-label="Close API settings">×</button></div>
+    <p class="note">Your key stays in memory in this tab only. Reloading disconnects it. With the relay enabled, it is sent over HTTPS to the relay shown below and then to your selected Alibaba endpoint. It is never saved in browser storage.</p>
+    <label>Base URL <input id="set-base" type="text" autocomplete="off" spellcheck="false"></label>
+    <label>Model <input id="set-model" type="text" autocomplete="off" spellcheck="false"></label>
+    <label>API Key <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste sk-… (leave blank to keep current key)"></label>
+    <label>Relay URL <input id="set-relay-url" type="text" autocomplete="off" spellcheck="false"></label>
+    <label class="row"><input id="set-relay" type="checkbox"> Use relay (Alibaba endpoints usually block direct browser calls)</label>
+    <p id="settings-error" role="alert" hidden></p>
+    <menu>
+      <button type="button" id="settings-disconnect">Disconnect</button>
+      <button type="button" id="settings-cancel">Cancel</button>
+      <button type="submit" id="settings-save">Connect</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dimension-dialog" aria-labelledby="dimension-title">
+  <form id="dimension-form">
+    <div class="panel-heading"><h2 id="dimension-title">Edit dimension</h2><button type="button" id="dimension-close" class="close-btn" aria-label="Close dimension editor">×</button></div>
+    <label>Value (mm)<input id="dim-edit" type="number" step="any" min="0.000001" max="1000000" required></label>
+    <p id="dimension-error" role="alert" hidden></p>
+    <menu><button type="button" id="dimension-cancel">Cancel</button><button type="submit">Apply</button></menu>
+  </form>
 </dialog>
 
 <script type="module" src="js/main.mjs"></script>
 </body>
 </html>
+

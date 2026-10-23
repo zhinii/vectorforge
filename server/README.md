@@ -1,32 +1,55 @@
 # VectorForge CAD relay
 
-Alibaba's endpoints send no CORS headers, so a browser app cannot call them
-directly. This relay is the bridge — same pattern as the robot simulator's
-relay, with the CAD scene envelope and system prompt instead of the robot's.
+The browser uses `/api/cad-chat` on the existing BNTA Robot Lab connection host.
+Alibaba requests go through this relay so cross-origin browser requests work.
+The existing robot `/api/chat` route is separate and must not be replaced.
 
-## Deploy
+## Authentication: bring your own key
 
-Deploy `cad-relay-route.ts` on the same host as the robot relay
-(`bnta-robot-lab-connection.zhinii.chatgpt.site`) as the route **`/api/cad-chat`**.
-That host appears to be a Cloudflare/Vercel-style edge runtime (the robot relay
-uses `cf-connecting-ip`); export `GET`/`POST`/`OPTIONS` as the route handlers.
+VectorForge keeps the pasted key in memory for the current tab. The request sends
+it as `Authorization: Bearer <key>` over HTTPS to the relay, which forwards it
+only to the selected allowlisted Alibaba endpoint for that request. This route
+does not read `ALIBABA_API_KEY`, store keys, log them, or fall back to a shared key.
+Do not paste a key into a chat prompt, URL, source file, or committed configuration.
+The user-selected model is sent as `model`; `X-Alibaba-Base` selects the endpoint.
 
-Environment variables:
+No environment variables are required for this CAD route. Any environment
+variables used by the existing robot route are unrelated and are left unchanged.
 
-| var | required | default |
-|---|---|---|
-| `ALIBABA_API_KEY` | yes | — |
-| `ALIBABA_BASE_URL` | no | `https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1` |
-| `ALIBABA_MODEL` | no | `qwen3.8-flash` |
+## Deploy and keep source in sync
 
-The relay uses the **server-side** key; browser-supplied keys are ignored.
-Origins are whitelisted to `https://zhinii.github.io` plus localhost — edit
-`allowedOrigins` if you fork.
+Copy `cad-relay-route.ts` unchanged to `app/api/cad-chat/route.ts` in the hosted
+Vinext source. Copy `cad-relay-system.mjs` alongside it under that same filename.
+Build and deploy the existing Site, preserving its audience and other routes.
+The default URL is:
 
-## Client settings
+https://bnta-robot-lab-connection.zhinii.chatgpt.site/api/cad-chat
 
-The app defaults to relay URL `…/api/cad-chat`. If you deploy elsewhere,
-change it under **API → Relay URL**.
+A credential-free GET returns `auth: "byok"`. OPTIONS from
+`https://zhinii.github.io`, `http://localhost:4226`, or
+`http://127.0.0.1:4226` returns 204 with the required CORS headers. A POST from an
+allowed origin without Authorization returns 401 with CORS, without contacting
+Alibaba. Do not test with a real key unless the user approves spending.
 
-Rate limits: 12 requests/min per IP, 60/min global, 3 concurrent — provider
-account quota remains the hard spending boundary.
+## Request and response contract
+
+POST JSON: `{ model, messages }`. The last user message is JSON containing
+`{ question, scene: { entities: [...] } }`. A schema-repair attempt uses the same
+envelope, optionally with `responseRepair`. The relay supplies its own CAD system
+prompt and discards any browser-supplied system prompt. Success returns the
+OpenAI-compatible `choices[0].message.content` and `finish_reason` fields.
+
+Endpoint selection is exact-match allowlisted to the five Alibaba endpoints
+listed in the route source. Redirects are not followed. The route limits requests
+and provider responses to 64,000 bytes, each message/output to 12,000 characters,
+questions to 1,600 characters, scenes to 500 entities, and output to 2,000 tokens.
+Body receive timeout is 10 seconds; provider timeout is 25 seconds. Errors are
+sanitized and have CORS headers for allowed origins.
+
+Rate safeguards are per Worker isolate: 12 requests/minute/IP, 60/minute total,
+and 3 concurrent requests. These are not distributed rate limits or a guaranteed
+spending cap. Provider account quotas remain the hard spending boundary.
+
+Run credential-free provider-mocked tests with Node 24 or newer:
+
+`node --test server/relay.test.mjs`

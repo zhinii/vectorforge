@@ -25,28 +25,49 @@ Ops (omit unused fields):
 {"op":"delete","id":"e1"}  {"op":"clear"}
 Prefer construction with parameters over raw coordinate lists: use set_dimension for sizes, move for placement. Compose designs from primitives (a gear = circle + star teeth; a plate = rect + circles for holes). Keep every design dimensioned — never leave the user with an undimensioned shape. Sizes the user states are exact; honour them with set_dimension or the radius/width fields. If you cannot fulfil a request, explain briefly and return ops:[]. Never claim an op succeeded before it runs.`;
 
-export function validateConnection({ base, model, key }) {
-  const url = new URL(base);
-  // Only send the key to Alibaba's API domains, never a model-provided URL.
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port ||
-    !['qianwenaiapi.com', 'aliyuncs.com'].some(h => url.hostname.endsWith('.' + h))) throw Error('endpoint');
-  if (!/^[\w.\-]{1,100}$/.test(model) || typeof key !== 'string' || !key.trim() || key.length > 512) throw Error('credentials');
-  return { base: base.replace(/\/$/, ''), model, key: key.trim() };
+export const ENDPOINTS = new Set([
+  'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+  'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+  'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1',
+  'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+]);
+
+export function validateConnection({ base, model, key, relay = RELAY, useRelay = true }) {
+  base = String(base).replace(/\/$/, '');
+  if (!ENDPOINTS.has(base)) throw Error('endpoint');
+  if (typeof model !== 'string' || !/^[\w.\-]{1,100}$/.test(model) || typeof key !== 'string' ||
+    !/^sk-[A-Za-z0-9._-]{6,508}$/.test(key.trim())) throw Error('credentials');
+  // An unused relay setting must not break direct-provider requests.
+  if (useRelay === false) return { base, model, key: key.trim(), relay: RELAY, useRelay: false };
+  let url;
+  try { url = new URL(relay || RELAY); } catch { throw Error('relay'); }
+  // Do not forward credentials to an arbitrary URL, even on a redirect.
+  const official = url.origin === new URL(RELAY).origin && url.pathname === '/api/cad-chat';
+  const local = ['localhost', '127.0.0.1'].includes(url.hostname) &&
+    ['http:', 'https:'].includes(url.protocol) && url.pathname === '/api/cad-chat';
+  if ((!official && !local) || url.username || url.password || url.search || url.hash) throw Error('relay');
+  return { base, model, key: key.trim(), relay: url.href, useRelay: useRelay !== false };
 }
 
 const OP_TYPES = ['line', 'circle', 'arc', 'rect', 'polygon', 'star', 'move', 'set_dimension', 'delete', 'clear'];
-const isPt = p => Array.isArray(p) && p.length >= 2 && p.slice(0, 2).every(v => Number.isFinite(Number(v)));
-const okNum = v => Number.isFinite(Number(v));
+const okNum = v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1e6;
+const isPt = p => Array.isArray(p) && p.length === 2 && p.every(okNum);
+const optionalCount = (n, max) => n === undefined || (Number.isInteger(n) && n >= 3 && n <= max);
+const optionalRotation = n => n === undefined || okNum(n);
 
 function validOp(op) {
   if (!op || typeof op !== 'object' || !OP_TYPES.includes(op.op)) return false;
   switch (op.op) {
     case 'line': return isPt(op.from) && isPt(op.to);
     case 'circle': return isPt(op.center) && okNum(op.radius) && op.radius > 0;
-    case 'arc': return isPt(op.center) && okNum(op.radius) && op.radius > 0;
+    case 'arc': return isPt(op.center) && okNum(op.radius) && op.radius > 0 && okNum(op.start) && okNum(op.end);
     case 'rect': return isPt(op.center) && okNum(op.width) && okNum(op.height) && op.width > 0 && op.height > 0;
-    case 'polygon': return isPt(op.center) && okNum(op.radius) && op.radius > 0;
-    case 'star': return isPt(op.center) && okNum(op.radius) && op.radius > 0;
+    case 'polygon': return isPt(op.center) && okNum(op.radius) && op.radius > 0 &&
+      optionalCount(op.sides, 64) && optionalRotation(op.rotation);
+    case 'star': return isPt(op.center) && okNum(op.radius) && op.radius > 0 &&
+      optionalCount(op.points, 32) && optionalRotation(op.rotation) &&
+      (op.innerRatio === undefined || (okNum(op.innerRatio) && op.innerRatio > 0 && op.innerRatio < 1));
     case 'move': return typeof op.id === 'string' && isPt(op.to);
     case 'set_dimension': return typeof op.id === 'string' &&
       ['length', 'radius', 'width', 'height'].includes(op.dimension) && okNum(op.value) && op.value > 0;
@@ -60,26 +81,40 @@ export function parseResponse(raw) {
   const result = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
   if (!result || typeof result.reply !== 'string' || !result.reply.trim() || result.reply.length > 1200) throw Error('response');
   if (!Array.isArray(result.ops)) throw Error('response');
-  const ops = result.needsInput === true ? [] : result.ops.slice(0, 24);
+  if (result.ops.length > 24) throw Error('invalid');
+  const ops = result.needsInput === true ? [] : result.ops;
   if (!ops.every(validOp)) throw Error('invalid');
   return { reply: result.reply, needsInput: result.needsInput === true, ops };
 }
 
-export async function askAgent(connection, { question, history, scene }, signal, fetcher = fetch) {
+export async function askAgent(connection, task, signal, fetcher = fetch) {
+  const controller = new AbortController();
+  const forward = () => controller.abort(signal.reason);
+  if (signal?.aborted) forward();
+  else signal?.addEventListener('abort', forward, { once: true });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
+  try { return await requestAgent(connection, task, controller.signal, fetcher); }
+  catch (error) { if (timedOut) throw Error('timeout'); throw error; }
+  finally { clearTimeout(timer); signal?.removeEventListener('abort', forward); }
+}
+
+async function requestAgent(connection, { question, history, scene }, signal, fetcher) {
   const config = validateConnection(connection);
   const messages = [
     { role: 'system', content: SYSTEM },
     ...history.slice(-6).map(m => ({ role: m.role, content: String(m.content).slice(0, 1200) })),
     { role: 'user', content: JSON.stringify({ question, scene }) },
   ];
-  const needsRelay = new URL(config.base).hostname.startsWith('token-plan.') && connection.useRelay !== false;
-  const relayUrl = connection.relay || RELAY;
+  const needsRelay = config.useRelay;
+  const relayUrl = config.relay;
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    signal?.throwIfAborted();
     let response;
     try {
       response = await fetcher(needsRelay ? relayUrl : config.base + '/chat/completions', {
-        method: 'POST', signal,
+        method: 'POST', signal, redirect: 'error', credentials: 'omit', cache: 'no-store',
         headers: { 'Content-Type': 'application/json',
           ...(!needsRelay ? { 'Authorization': 'Bearer ' + config.key } : {}),
           ...(needsRelay ? { 'X-Alibaba-Base': config.base, 'Authorization': 'Bearer ' + config.key } : {}) },
@@ -87,6 +122,7 @@ export async function askAgent(connection, { question, history, scene }, signal,
           response_format: { type: 'json_object' }, stream: false, enable_thinking: false }),
       });
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       if (attempt === 0 && error instanceof TypeError && !signal?.aborted) continue;
       // TypeError after retry = browser blocked the cross-origin call (no CORS
       // headers on Alibaba endpoints) or the network is down.
@@ -95,14 +131,32 @@ export async function askAgent(connection, { question, history, scene }, signal,
     }
     if (attempt === 0 && [502, 503, 504].includes(response.status)) continue;
     if (!response.ok) {
-      if (needsRelay && response.status === 404) throw Error('relay_missing');
+      // Relay validation/rate-limit failures are not provider auth/quota failures.
+      // Accept only fixed codes; never echo arbitrary error text or credentials.
+      let relayError;
+      if (needsRelay) {
+        try { relayError = (await response.json())?.error; } catch { /* Bare HTTP failure. */ }
+        signal?.throwIfAborted();
+        if (['origin', 'request', 'scene_required', 'content_type', 'size', 'rate_limit',
+          'configuration', 'endpoint', 'auth', 'response', 'timeout', 'connection'].includes(relayError)) {
+          throw Error(relayError);
+        }
+        if (response.status === 404 && relayError !== 'provider') throw Error('relay_missing');
+      }
       throw Error(({ 401: 'auth', 403: 'auth', 429: 'quota', 400: 'model', 404: 'model' })[response.status] || 'provider');
     }
-    const data = await response.json();
+    let data;
+    try { data = await response.json(); } catch {
+      signal?.throwIfAborted();
+      throw Error('response');
+    }
+    signal?.throwIfAborted();
     const raw = data?.choices?.[0]?.message?.content;
     try {
       if (data?.choices?.[0]?.finish_reason === 'length') throw Error('truncated');
-      return parseResponse(raw);
+      const result = parseResponse(raw);
+      result.reply = result.reply.replaceAll(config.key, '[redacted]').replace(/sk-[A-Za-z0-9._-]{6,}/g, '[redacted]');
+      return result;
     } catch (error) {
       if (attempt === 0) {
         messages.push(
@@ -115,3 +169,4 @@ export async function askAgent(connection, { question, history, scene }, signal,
     }
   }
 }
+
