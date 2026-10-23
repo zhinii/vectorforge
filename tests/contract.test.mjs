@@ -15,7 +15,7 @@ test('real client and relay contract work together with only a mocked provider',
     providerCalls.push(body);
     assert.equal(url, DEFAULTS.base + '/chat/completions');
     assert.equal(options.headers.Authorization, 'Bearer ' + key);
-    assert.equal(body.messages[0].content, CAD_SYSTEM);
+    assert.ok(body.messages[0].content.startsWith(CAD_SYSTEM)); assert.match(body.messages[0].content,/English/);
     return Response.json({ choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] });
   };
   try {
@@ -40,7 +40,7 @@ test('published HTML and every browser module share one cache-busting release', 
   const version = /src="js\/main\.mjs\?v=([^"]+)"/.exec(html)?.[1];
   assert.ok(version, 'Entry module must have a release version');
   assert.ok(html.includes(`href="style.css?v=${version}"`));
-  for (const file of ['js/main.mjs', 'js/dxf.mjs']) {
+  for (const file of ['js/main.mjs', 'js/dxf.mjs', 'js/spatial.mjs']) {
     for (const match of (await read(file)).matchAll(/from\s+'(\.\/[^']+)'/g)) {
       assert.ok(match[1].endsWith(`?v=${version}`), `${file}: ${match[1]} must use the same release`);
     }
@@ -50,5 +50,5 @@ test('published HTML and every browser module share one cache-busting release', 
 test('opening a dimension on pointerdown suppresses the later native canvas focus', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(new URL('../js/main.mjs', import.meta.url), 'utf8');
-  assert.match(source, /if \(box\) \{ ev\.preventDefault\(\); openDimension\(box\); return; \}/);
+  assert.match(source, /if \(box\) \{\s*ev\.preventDefault\(\);\s*if \(!box\.measurement\) \{ openDimension\(box\); return; \}/);
 });

@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import * as model from '../js/model.mjs';
 import * as agent from '../js/agent.mjs';
 import * as dxf from '../js/dxf.mjs';
+import * as i18n from '../js/i18n.mjs';
+import * as spatial from '../js/spatial.mjs';
 
 // DOM contract/event regression harness, not a browser or layout/focus-trap test.
 // Production code is unchanged. Test-only read access is appended in a VM copy.
@@ -52,6 +54,7 @@ class Element {
   set innerHTML(value) { assert.equal(value, ''); this.children = []; this._text = ''; }
 }
 function setup() {
+  i18n.setLanguage('en');
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const document = new Element('document'); document.ownerDocument = document; document.activeElement = document;
   const elements = [], ids = new Map(), stack = [document];
@@ -64,7 +67,7 @@ function setup() {
     } else if (token[4]) stack.at(-1)._text += token[4];
   }
   document.getElementById = id => { assert.ok(ids.has(id), `Missing HTML element: ${id}`); return ids.get(id); };
-  document.querySelectorAll = selector => selector === '#draw-tools .tool' ? elements.filter(e => e.dataset.tool) : [];
+  document.querySelectorAll = selector => selector === '#draw-tools .tool' ? elements.filter(e => e.dataset.tool) : /^\[data-i18n[^\]]*\]$/.test(selector) ? elements.filter(e => e.getAttribute(selector.slice(1,-1)) !== null) : [];
   document.querySelector = selector => selector === 'dialog[open]' ? elements.find(e => e.tagName === 'DIALOG' && e.open) || null : null;
   document.createElement = tag => new Element(tag, {}, document);
   document.createTextNode = text => { const el = new Element('#text', {}, document); el.textContent = text; return el; };
@@ -76,11 +79,12 @@ function setup() {
   const storageCalls = [];
   const storage = { removeItem: key => storageCalls.push(['remove', key]), setItem: (...args) => { storageCalls.push(['set', ...args]); } };
   const requests = [];
-  const fetcher = (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
-  const context = vm.createContext({ ...model, ...agent, ...dxf, askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
-    AbortController, URL, console, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
+  const healthCalls = [];
+  const fetcher = (url, options) => { if (options.method === 'GET') { healthCalls.push({url,options}); return Promise.resolve({ok:true,status:200,json:async()=>({service:'VectorForge CAD connection',configured:true,auth:'server+byok',defaultMode:'server',serverConfigured:true,serverModel:'qwen3.8-flash',version:2})}); } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
+  const context = vm.createContext({ ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
+    AbortController, URL, console, setTimeout, clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
   const source = readFileSync(new URL('../js/main.mjs', import.meta.url), 'utf8').replace(/^import[^]*?from\s+'[^']+';\s*/gm, '');
-  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState });', context, { filename: 'main.mjs' });
+  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled });', context, { filename: 'main.mjs' });
   const el = id => document.getElementById(id);
   const click = async id => { el(id).focus(); await el(id).dispatch('click'); };
   const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -114,7 +118,7 @@ test('settings X, Cancel, backdrop, native Escape contract, focus return, key cl
   }
   assert.equal(dlg.modalCalls, 4); assert.equal(h.requests.length, 0);
   await h.click('settings-btn'); await dlg.dispatch('pointerdown', { clientX: 120, clientY: 120 }); await dlg.dispatch('click', { clientX: 120, clientY: 120 }); assert.equal(dlg.open, true);
-  await h.el('settings-form').dispatch('submit'); assert.equal(dlg.open, true); assert.equal(h.el('settings-error').hidden, false); assert.match(h.el('settings-error').textContent, /key/);
+  h.el('set-mode').value='byok'; await h.el('settings-form').dispatch('submit'); assert.equal(dlg.open, true); assert.equal(h.el('settings-error').hidden, false); assert.match(h.el('settings-error').textContent, /key/);
 });
 
 test('timeline is initially inert and closes by X, toggle, outside, Escape or opening a dialog', async () => {
@@ -159,7 +163,7 @@ test('two-touch pinch zooms without geometry or undo entries; canceled pointers 
 });
 
 test('connect through API form and design success are transient, transactional and undoable', async () => {
-  const h = setup(); await h.click('settings-btn'); h.el('set-key').value = 'sk-testdummy12345'; await h.el('settings-form').dispatch('submit');
+  const h = setup(); await h.click('settings-btn'); h.el('set-mode').value='byok'; h.el('set-key').value = 'sk-testdummy12345'; await h.el('settings-form').dispatch('submit');
   assert.equal(h.state().connState, 'checking'); assert.equal(h.el('settings-dialog').open, false); assert.equal(h.el('set-key').value, '');
   assert.equal(h.requests[0].options.headers.Authorization, 'Bearer sk-testdummy12345'); assert.equal(h.requests[0].options.credentials, 'omit');
   await h.respond(0); assert.equal(h.state().connState, 'on');
@@ -189,12 +193,12 @@ test('new key supersedes connection attempt and old result cannot replace newer 
   assert.equal(h.state().connState, 'on'); assert.equal(h.state().connection.key, 'sk-seconddummy12345'); assert.doesNotMatch(h.log(), /firstdummy|seconddummy|Connection test failed/);
 });
 
-test('manual geometry edits abort pending AI and stale selection response is rejected', async () => {
+test('manual geometry edits abort pending AI but selection-only changes preserve submitted target', async () => {
   const h = setup(); await h.connect(); let done = h.submit('chat-form', 'circle'); await h.tool('line'); await h.tap(500, 350); await h.tap(540, 350);
   assert.equal(h.requests[1].options.signal.aborted, true); await h.respond(1, { reply: 'Late', ops: [{ op: 'clear' }] }); await done; assert.equal(h.state().doc.entities.length, 1);
   done = h.submit('chat-form', 'make selected bigger'); await h.tool('select'); await h.tap(100, 100); assert.equal(h.state().doc.selectedId, null);
-  await h.respond(2, { reply: 'Stale', ops: [{ op: 'clear' }] }); await done;
-  assert.equal(h.state().doc.entities.length, 1); assert.match(h.log(), /selection or drawing changed/); assert.doesNotMatch(h.log(), /Stale/);
+  await h.respond(2, { reply: 'Applied to original scene', ops: [{ op: 'circle', center:[30,0], radius:5 }] }); await done;
+  assert.equal(h.state().doc.entities.length, 2); assert.doesNotMatch(h.log(), /selection or drawing changed/); assert.match(h.log(), /Applied to original scene/);
 });
 
 test('invalid AI operations leave geometry and undo history untouched', async () => {
@@ -313,7 +317,7 @@ test('mobile viewport containment excludes closed drawer without disabling acces
   assert.match(css, /#workspace \{[^}]*min-width: 0[^}]*overflow: hidden/s);
   assert.match(css, /#timeline-panel:not\(\.open\) \{ display: none; \}/);
   assert.match(css, /dialog \{\s*position: fixed; inset: auto; margin: 0;/);
-  assert.match(css, /\.actions \{ grid-template-columns: repeat\(7, minmax\(0, 1fr\)\); \}/);
+  assert.match(css, /\.actions \{ grid-template-columns: repeat\(6, minmax\(0, 1fr\)\); \}/);
   assert.doesNotMatch(h.html, /user-scalable\s*=\s*no|maximum-scale\s*=/i);
 });
 
@@ -347,4 +351,97 @@ test('Timeline floats above scene on short zoomed or keyboard viewport to keep l
   await h.click('timeline-toggle');
   assert.equal(css['--drawer-top'], '12px');
   assert.equal(css['--drawer-height'], '228px');
+});
+
+test('touch Copy/Paste makes detached offset geometry with unique IDs and undo/redo', async () => {
+  const h=setup(); assert.equal(h.el('copy-selected').disabled,true); assert.equal(h.el('paste-selected').disabled,true);
+  await h.tool('circle'); await h.tap(500,350); await h.tap(540,350);
+  const original=JSON.stringify(h.state().doc.entities[0]);
+  await h.click('copy-selected'); await h.click('paste-selected');
+  let es=h.state().doc.entities;
+  assert.equal(es.length,2); assert.notEqual(es[0].id,es[1].id); assert.equal(es[1].r,10);
+  assert.deepEqual(Array.from(es[1].c),[6,-6]); assert.equal(JSON.stringify(es[0]),original);
+  await h.click('paste-selected'); es=h.state().doc.entities; assert.deepEqual(Array.from(es[2].c),[12,-12]);
+  assert.equal(new Set(es.map(e=>e.id)).size,3);
+  await h.click('undo'); assert.equal(h.state().doc.entities.length,2);
+  await h.click('redo'); assert.equal(h.state().doc.entities.length,3);
+  await h.click('delete-selected'); await h.click('paste-selected'); assert.equal(h.state().doc.entities.length,3);
+});
+
+test('keyboard Copy/Paste ignores editable fields and does not request system clipboard', async () => {
+  const h=setup(); await h.tool('line'); await h.tap(500,350); await h.tap(540,350);
+  await h.window.dispatch('keydown',{key:'c',ctrlKey:true,target:h.el('chat-input')}); assert.equal(h.state().clipboard,null);
+  await h.window.dispatch('keydown',{key:'c',ctrlKey:true,target:h.el('canvas')});
+  await h.window.dispatch('keydown',{key:'v',metaKey:true,target:h.el('chat-input')}); assert.equal(h.state().doc.entities.length,1);
+  await h.window.dispatch('keydown',{key:'v',metaKey:true,target:h.el('canvas')}); assert.equal(h.state().doc.entities.length,2);
+});
+
+test('line drawing snaps to endpoint and perpendicular foot with visible targets; toggle disables', async () => {
+  const h=setup(); await h.tool('line'); await h.tap(500,350); await h.tap(660,350);
+  await h.pointer('pointermove',503,352); assert.equal(h.state().snapTarget.kind,'endpoint');
+  await h.tap(503,352); assert.deepEqual(Array.from(h.state().pending.start),[0,0]);
+  await h.tap(500,430);
+  await h.tool('line'); await h.tap(600,430); await h.pointer('pointermove',601,352);
+  assert.equal(h.state().snapTarget.kind,'perpendicular'); await h.tap(601,352);
+  assert.deepEqual(Array.from(h.state().doc.entities.at(-1).p2),[25,0]);
+  await h.click('snap-toggle'); assert.equal(h.state().snapEnabled,false);
+  await h.pointer('pointermove',503,352); assert.equal(h.state().snapTarget,null);
+  await h.tap(503,352); assert.deepEqual(Array.from(h.state().pending.start),[.75,-.5]);
+});
+
+test('nearby measurement labels drag without changing geometry and remain undoable', async () => {
+  const h=setup(); await h.tool('line'); await h.tap(400,470); await h.tap(650,470);
+  await h.tool('circle'); await h.tap(500,350); await h.tap(540,350); await h.tool('select');
+  const b=h.state().dimBoxes.find(b=>b.measurement); assert.ok(b);
+  assert.equal(b.measurement.centerDistance,30); assert.equal(b.measurement.clearance,20);
+  const before=JSON.stringify(h.state().doc.entities), count=h.state().undoStack.length;
+  await h.pointer('pointerdown',b.x+8,b.y+8); await h.pointer('pointermove',b.x+38,b.y+28); await h.pointer('pointerup',b.x+38,b.y+28);
+  assert.equal(JSON.stringify(h.state().doc.entities),before); assert.equal(h.state().undoStack.length,count+1);
+  assert.ok(h.state().labelOffsets[b.labelKey]); assert.equal(h.el('dimension-dialog').open,false);
+  await h.click('undo'); assert.equal(Object.keys(h.state().labelOffsets).length,0);
+  await h.click('measurements-toggle'); assert.equal(h.state().dimBoxes.some(b=>b.measurement),false);
+});
+
+test('four-point cubic Bezier creates, reshapes, copies and exports through supported model', async () => {
+  const h=setup(); await h.tool('bezier');
+  for (const p of [[500,350],[520,290],[580,290],[600,350]]) await h.tap(...p);
+  let e=h.state().doc.entities[0]; assert.equal(e.type,'bezier'); assert.deepEqual(Array.from(e.c1),[5,15]);
+  await h.tool('select'); await h.pointer('pointerdown',520,290); await h.pointer('pointermove',520,270); await h.pointer('pointerup',520,270);
+  assert.equal(e.c1[1],20); await h.click('copy-selected'); await h.click('paste-selected');
+  e=h.state().doc.entities[1]; assert.equal(e.type,'bezier'); assert.deepEqual(Array.from(e.c1),[11,14]);
+  await h.click('undo'); assert.equal(h.state().doc.entities.length,1);
+});
+
+test('language switch translates static, live dimension, errors and AI task without altering geometry', async () => {
+  const h=setup(); await h.tool('circle'); await h.tap(500,350); await h.tap(540,350);
+  const before=JSON.stringify(h.state().doc.entities);
+  h.el('language-select').value='zh'; await h.el('language-select').dispatch('change');
+  assert.equal(h.el('copy-selected').textContent,'复制'); assert.match(h.el('coords').textContent,/毫米/);
+  assert.equal(JSON.stringify(h.state().doc.entities),before); assert.match(h.log(),/已就绪/);
+  await h.submit('chat-form','sk-testdummy12345'); await h.respond(0);
+  const pending=h.submit('chat-form','画一个圆'); assert.equal(JSON.parse(h.requests[1].options.body).language,'zh');
+  await h.respond(1,{reply:'已创建。',ops:[]}); await pending;
+  assert.match(h.log(),/已创建。/);
+  h.el('language-select').value='en'; await h.el('language-select').dispatch('change'); assert.equal(h.el('copy-selected').textContent,'Copy');
+});
+
+test('saved-server mode starts ready without a provider call, then connects without browser key', async () => {
+  const h=setup(); await h.tick(); assert.equal(h.state().connState,'ready'); assert.equal(h.requests.length,0);
+  const done=h.submit('chat-form','draw a circle');
+  assert.equal(h.requests[0].options.headers['X-VectorForge-Auth'],'server');
+  assert.equal(h.requests[0].options.headers.Authorization,undefined);
+  await h.respond(0,{reply:'Created',ops:[{op:'circle',center:[0,0],radius:10}]}); await done;
+  assert.equal(h.state().connState,'on'); assert.equal(h.state().doc.entities.length,1);
+});
+
+test('manual text tool validates, adds Unicode text, copies and undoes without outline claims', async () => {
+  const h=setup();await h.tool('text');await h.tap(500,350);
+  assert.equal(h.el('text-dialog').open,true); assert.equal(h.document.activeElement.id,'text-content');
+  h.el('text-content').value='Chris 小陈';h.el('text-size').value='12'; await h.el('text-form').dispatch('submit');
+  assert.equal(h.el('text-dialog').open,false); assert.equal(h.state().doc.entities[0].type,'text');
+  assert.equal(h.state().doc.entities[0].text,'Chris 小陈');
+  await h.click('copy-selected');await h.click('paste-selected'); assert.equal(h.state().doc.entities[1].size,12);
+  assert.deepEqual(Array.from(h.state().doc.entities[1].c),[6,-6]); await h.click('undo');assert.equal(h.state().doc.entities.length,1);
+  await h.tap(700,350);h.el('text-content').value='bad\ntext'; await h.el('text-form').dispatch('submit');
+  assert.equal(h.el('text-error').hidden,false);assert.equal(h.state().doc.entities.length,1);await h.click('text-cancel');
 });

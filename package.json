@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs server/relay.test.mjs",
-    "check": "node --check js/main.mjs && node --check js/agent.mjs && node --check js/model.mjs && node --check js/dxf.mjs",
+    "check": "node --check js/main.mjs && node --check js/agent.mjs && node --check js/model.mjs && node --check js/dxf.mjs && node --check js/spatial.mjs && node --check js/i18n.mjs",
     "serve": "python3 -m http.server 4226"
   },
   "engines": { "node": ">=24" }

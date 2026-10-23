@@ -1,5 +1,5 @@
-// VectorForge BYOK relay. Copy unchanged to app/api/cad-chat/route.ts.
-// The browser's key is used for this request only; no environment key is read.
+// VectorForge prototype relay: explicit saved-server-key or request-only BYOK mode.
+// Public server mode is intentional; per-isolate limits are not an account spending cap.
 import { CAD_SYSTEM } from './cad-relay-system.mjs';
 
 const allowedOrigins = new Set(['https://zhinii.github.io', 'http://127.0.0.1:4226', 'http://localhost:4226']);
@@ -18,7 +18,7 @@ function headers(origin: string) {
   return {
     ...(allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Alibaba-Base',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Alibaba-Base, X-VectorForge-Auth',
     'Vary': 'Origin', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
   };
 }
@@ -54,9 +54,18 @@ async function readJson(stream: ReadableStream<Uint8Array> | null, maxBytes: num
   }
 }
 
+function serverConfiguration() {
+  const key = (process.env.ALIBABA_API_KEY || '').trim();
+  const base = process.env.ALIBABA_BASE_URL || defaultBase;
+  const model = process.env.ALIBABA_MODEL || 'qwen3.8-flash';
+  return key && /^[\x21-\x7e]{1,512}$/.test(key) && endpoints.has(base) && /^[\w.\-]{1,100}$/.test(model)
+    ? { key, base, model } : null;
+}
+
 export async function GET(request: Request) {
   const origin = request.headers.get('origin') || '';
-  return response(origin, { service: 'VectorForge CAD connection', configured: true, auth: 'byok', version: 1 });
+  const config = serverConfiguration();
+  return response(origin, { service: 'VectorForge CAD connection', configured: true, auth: 'server+byok', defaultMode: 'server', serverConfigured: !!config, ...(config ? { serverModel: config.model } : {}), version: 2 });
 }
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get('origin') || '';
@@ -66,11 +75,17 @@ export async function POST(request: Request) {
   const origin = request.headers.get('origin') || '';
   const reply = (data: unknown, status = 200) => response(origin, data, status);
   if (!allowedOrigins.has(origin)) return reply({ error: 'origin' }, 403);
+  const mode = request.headers.get('x-vectorforge-auth') || 'byok';
+  if (mode !== 'server' && mode !== 'byok') return reply({ error: 'auth_mode' }, 400);
   const authorization = request.headers.get('authorization') || '';
-  // This reference is never put in a cache, log, response, or persistent state.
-  const key = /^Bearer ([\x21-\x7e]{1,512})$/.exec(authorization)?.[1];
+  // Explicit modes prevent an invalid browser key from falling back to the saved key.
+  if (mode === 'server' && authorization) return reply({ error: 'mode_credentials' }, 400);
+  const config = mode === 'server' ? serverConfiguration() : null;
+  if (mode === 'server' && !config) return reply({ error: 'server_configuration' }, 503);
+  // Neither key is put in a cache, log, response, or browser-visible state.
+  const key = mode === 'server' ? config!.key : /^Bearer ([\x21-\x7e]{1,512})$/.exec(authorization)?.[1];
   if (!key) return reply({ error: 'auth' }, 401);
-  const base = request.headers.get('x-alibaba-base') || defaultBase;
+  const base = mode === 'server' ? config!.base : request.headers.get('x-alibaba-base') || defaultBase;
   if (!endpoints.has(base)) return reply({ error: 'endpoint' }, 400);
   if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json')
     return reply({ error: 'content_type' }, 400);
@@ -93,7 +108,7 @@ export async function POST(request: Request) {
   let providerTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const body = await readJson(request.body, 64000, 10000);
-    if (!body || typeof body !== 'object' || !/^[\w.\-]{1,100}$/.test(body.model || '') ||
+    if (!body || typeof body !== 'object' || (body.max_tokens !== undefined && (!Number.isInteger(body.max_tokens) || body.max_tokens < 1)) || (mode === 'byok' && !/^[\w.\-]{1,100}$/.test(body.model || '')) ||
       !Array.isArray(body.messages) || !body.messages.length || body.messages.length > 14 ||
       body.messages.some((m: any) => !m || !['system', 'assistant', 'user'].includes(m.role) ||
         typeof m.content !== 'string' || m.content.length > 12000)) return reply({ error: 'request' }, 400);
@@ -102,9 +117,13 @@ export async function POST(request: Request) {
     let task;
     try { task = JSON.parse(last.content); } catch { return reply({ error: 'scene_required' }, 400); }
     if (!task || typeof task.question !== 'string' || !task.question.trim() || task.question.length > 1600 ||
-      !Array.isArray(task.scene?.entities) || task.scene.entities.length > 500)
+      !Array.isArray(task.scene?.entities) || task.scene.entities.length > 500 ||
+      (task.language !== undefined && !['en', 'zh'].includes(task.language)))
       return reply({ error: 'scene_required' }, 400);
-    const messages = [{ role: 'system', content: CAD_SYSTEM },
+    const languageInstruction = task.language === 'zh'
+      ? '\nWrite reply and clarification questions in Simplified Chinese. Keep all JSON keys, operation names, IDs, and numeric geometry unchanged.'
+      : '\nWrite reply and clarification questions in English. Keep all JSON keys, operation names, IDs, and numeric geometry unchanged.';
+    const messages = [{ role: 'system', content: CAD_SYSTEM + languageInstruction },
       ...body.messages.filter((m: any) => m.role !== 'system').slice(-13)
         .map((m: any) => ({ role: m.role, content: m.content }))];
     stage = 'provider';
@@ -112,7 +131,7 @@ export async function POST(request: Request) {
     const upstream = await fetch(base + '/chat/completions', {
       method: 'POST', redirect: 'manual', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-      body: JSON.stringify({ model: body.model, messages, max_tokens: 2000,
+      body: JSON.stringify({ model: mode === 'server' ? config!.model : body.model, messages, max_tokens: Math.min(body.max_tokens ?? 2000, 2000),
         response_format: { type: 'json_object' }, temperature: .2, stream: false, enable_thinking: false }),
     });
     if (!upstream.ok) {

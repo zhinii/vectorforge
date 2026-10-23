@@ -44,21 +44,19 @@ turn. The design principles, in order of importance:
    canvas gets everything else. The console is a command line that also
    accepts natural language — not a chat app with a canvas attached.
 
-## Current state (v1)
+## Current state
 
-- Parametric entities: line, circle, arc, rect, polygon, star
-- Grip dragging (endpoints, radius points, vertices, arc angles) with live
-  dimension readout; click/tap a dimension to type a driving value
-- Pan (middle/right/two-finger drag), zoom (wheel/pinch), adaptive mm grid
-- Undo/redo (document snapshots), visible Delete-selected button, keyboard shortcuts (V L C R S A)
-- Timeline: every op (human or AI) is a listed entry; the seed of a future
-  parametric feature tree
-- AI console: paste an `sk-…` key to connect; connection is **verified with a
-  real test call** before the AI unlocks; status light in the prompt row
-  (grey → amber → green/red); keys stay in memory for this tab only and
-  are cleared on reload or Disconnect
-- Export: DXF R2000 (LINE/CIRCLE/ARC/LWPOLYLINE, y-up mm) and SVG
-- Mobile: full touch support, keypad-sized chips, 8-line scrollable console
+- Line, circle, arc, rectangle, polygon, star, cubic Bézier and editable text entities.
+- Visible Copy/Paste/Delete, undo/redo and keyboard shortcuts. Copies receive new IDs and a screen-space offset; the OS clipboard is not accessed.
+- Geometry snapping to endpoints, midpoints, centers and nearest outlines, with screen-space tolerance and a visible target. Lines also offer finite perpendicular feet and analytic circle/arc tangents. These are placement aids, not permanent constraints.
+- Up to three nearby edge measurements for a selected shape. Circle measurements distinguish center-to-edge distance from boundary clearance. Green measurement labels can be selected and dragged without moving geometry; their positions are undoable. A line wholly inside a circle has a positive distance to the circumference, not a signed overlap value.
+- Bézier: click start, first handle, second handle, end; select and drag the four grips. Endpoint/midpoint snapping is exact; curve-nearest, tangent and proximity measurements are deliberately omitted rather than presented as exact.
+- Text: click a baseline position, enter one line and its font size. Editable text is not an outlined laser/CNC cutting path. Font bounds used for picking are approximate and excluded from geometric measurements.
+- English / 简体中文 switch translates the interface, errors, dimensions and help locally, without an API call. AI replies are requested in the selected language; schema names remain English.
+- Saved server key is the public prototype default, with no sign-in or key paste. A health check reports readiness; only a successful AI request reports connected. Optional BYOK remains tab-memory only and never falls back to the saved key if rejected.
+- Selection, pan and zoom do not invalidate a running AI request; its submitted target selection is frozen. Geometry changes stop stale requests.
+- Exact SVG Bézier curves; DXF Béziers are sampled polylines (0.05 mm target tolerance, 4096-segment cap). Text exports as SVG text or DXF TEXT, not outlines.
+- Touch pan/pinch, visible undo/delete, eight-line console, and visual-viewport-contained dialogs and Timeline.
 
 ## Architecture
 
@@ -82,6 +80,8 @@ Valid ops (validated in `js/agent.mjs`, executed in `js/model.mjs`):
 | op | params | effect |
 |---|---|---|
 | `line` | `from`, `to` | new line |
+| `bezier` | `from`, `control1`, `control2`, `to` | cubic Bézier |
+| `text` | `at`, `text`, `size` | single-line editable text |
 | `circle` | `center`, `radius` | new circle |
 | `arc` | `center`, `radius`, `start`, `end` (deg, CCW) | new arc |
 | `rect` | `center`, `width`, `height` | new rectangle |

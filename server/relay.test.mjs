@@ -27,10 +27,10 @@ async function mocked(fetcher, run) {
 }
 const noProvider = () => { throw Error('Unexpected provider call'); };
 
-test('health explicitly reports BYOK; preflight allows only known origins', async () => {
+test('health explicitly reports server and BYOK; preflight allows only known origins', async () => {
   const route = await fresh();
   const health = await route.GET(new Request('https://relay.example', { headers: { Origin: origin } }));
-  assert.equal((await health.json()).auth, 'byok');
+  const status=await health.json(); assert.equal(status.auth,'server+byok'); assert.equal(status.defaultMode,'server'); assert.equal(status.version,2);
   for (const o of [origin, 'http://localhost:4226', 'http://127.0.0.1:4226']) {
     const r = await route.OPTIONS(new Request('https://relay.example', { headers: { Origin: o } }));
     assert.equal(r.status, 204); assert.equal(r.headers.get('access-control-allow-origin'), o);
@@ -74,7 +74,7 @@ test('forwards request key/base/model only, replaces system, bounds provider out
       assert.equal(init.redirect, 'manual');
       const payload = JSON.parse(init.body);
       assert.equal(payload.model, 'qwen3.8-flash');
-      assert.equal(payload.messages[0].content, CAD_SYSTEM);
+      assert.ok(payload.messages[0].content.startsWith(CAD_SYSTEM)); assert.match(payload.messages[0].content,/English/);
       assert.equal(payload.messages.filter(m => m.role === 'system').length, 1);
       assert.equal(payload.max_tokens, 2000); assert.equal(payload.stream, false);
       assert.equal(payload.enable_thinking, false);
@@ -126,4 +126,30 @@ test('per-client request and concurrency caps prevent unbounded provider calls',
     for (const resolve of resolvers) resolve(provider());
     assert.ok((await Promise.all(running)).every(r => r.status === 200));
   });
+});
+
+test('explicit server mode uses only saved configuration, honors small cap and selected language', async () => {
+  const previous=process.env.ALIBABA_API_KEY;process.env.ALIBABA_API_KEY='mock-saved-server-key';
+  try { await mocked(async (url,init)=>{
+    assert.equal(init.headers.Authorization,'Bearer mock-saved-server-key');
+    const data=JSON.parse(init.body);assert.equal(data.max_tokens,1000);assert.equal(data.model,'qwen3.8-flash');
+    assert.match(data.messages[0].content,/Simplified Chinese/);assert.match(data.messages[0].content,/"op":"text"/);
+    return provider();
+  },async()=>{
+    const data=body();data.max_tokens=1000;data.model='untrusted';data.messages.at(-1).content=JSON.stringify({question:'Draw Chris',language:'zh',scene:{entities:[]}});
+    const r=await(await fresh()).POST(request(data,{Authorization:'','X-VectorForge-Auth':'server','X-Alibaba-Base':'https://evil.example'}));assert.equal(r.status,200);
+  }); } finally {if(previous===undefined)delete process.env.ALIBABA_API_KEY;else process.env.ALIBABA_API_KEY=previous;}
+});
+
+test('explicit authentication modes reject conflicting credentials and never silently fall back', async () => {
+  const previous=process.env.ALIBABA_API_KEY;process.env.ALIBABA_API_KEY='mock-saved-server-key';
+  try { await mocked(noProvider,async()=>{
+    for(const [headers,status,code] of [
+      [{'X-VectorForge-Auth':'server'},400,'mode_credentials'],
+      [{'X-VectorForge-Auth':'byok',Authorization:''},401,'auth'],
+      [{'X-VectorForge-Auth':'invalid'},400,'auth_mode'],
+    ]) {const r=await(await fresh()).POST(request(body(),headers));assert.equal(r.status,status);assert.equal((await r.json()).error,code);}
+    delete process.env.ALIBABA_API_KEY;
+    const r=await(await fresh()).POST(request(body(),{'X-VectorForge-Auth':'server',Authorization:''}));assert.equal(r.status,503);assert.equal((await r.json()).error,'server_configuration');
+  });}finally{if(previous===undefined)delete process.env.ALIBABA_API_KEY;else process.env.ALIBABA_API_KEY=previous;}
 });
