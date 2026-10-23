@@ -1,7 +1,7 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
          distanceToEntity, moveEntity, isClosed } from './model.mjs';
-import { askAgent, validateConnection, DEFAULTS } from './agent.mjs';
+import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs';
 import { toDXF, toSVG, download } from './dxf.mjs';
 
 const canvas = document.getElementById('canvas');
@@ -26,14 +26,14 @@ const undoStack = [], redoStack = [];
 function snapshot() {
   return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId });
 }
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
+function pushUndo() { cancelDesignRequest(); undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
 function restore(snap) {
   const d = JSON.parse(snap);
   doc.entities = d.entities; doc.timeline = d.timeline; doc.selectedId = d.selectedId;
-  refreshTimeline(); draw();
+  pending = null; drag = null; refreshTimeline(); draw();
 }
-function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); }
-function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); }
+function undo() { if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); restore(undoStack.pop()); }
+function redo() { if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); restore(redoStack.pop()); }
 
 // ---- interaction state ----
 let tool = 'select';
@@ -61,6 +61,7 @@ function canvasClick(world) {
   }
   const [x0, y0] = pending.start, [x1, y1] = world;
   let op = null;
+  if (tool === 'line' && Math.hypot(x1-x0, y1-y0) < .001) return true;
   if (tool === 'line') op = { op: 'line', from: [x0, y0], to: [x1, y1] };
   else if (tool === 'circle') op = { op: 'circle', center: [x0, y0], radius: Math.max(0.5, Math.hypot(x1 - x0, y1 - y0)) };
   else if (tool === 'rect') op = { op: 'rect', center: [(x0 + x1) / 2, (y0 + y1) / 2], width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
@@ -108,6 +109,8 @@ function drawPreview() {
 
 // ---- rendering ----
 function draw() {
+  document.getElementById('undo').disabled = !undoStack.length;
+  document.getElementById('redo').disabled = !redoStack.length;
   const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
   drawGrid(W, H);
@@ -191,7 +194,8 @@ function entityAt(screen) {
   const p = s2w(screen);
   let best = null, bestD = PICK_TOL / view.s;
   for (const e of doc.entities) {
-    const d = distanceToEntity(p, e);
+    const center = e.type === 'line' ? [(e.p1[0] + e.p2[0])/2, (e.p1[1] + e.p2[1])/2] : e.c;
+    const d = Math.min(distanceToEntity(p, e), Math.hypot(p[0] - center[0], p[1] - center[1]));
     if (d < bestD) { bestD = d; best = e; }
   }
   return best;
@@ -205,14 +209,22 @@ function evPos(ev) {
 
 const pointers = new Map(); // active pointerId → screen pos (for pinch)
 let pinch = null;           // {dist, mid}
+let suppressGesture = false;
+let toolTap = null;
+function dimensionAt(s) { return dimBoxes.find(b => s[0] >= b.x - 4 && s[0] <= b.x + b.w + 4 && s[1] >= b.y - 4 && s[1] <= b.y + b.h + 4); }
 
 canvas.addEventListener('pointerdown', ev => {
-  canvas.setPointerCapture(ev.pointerId);
+  if (document.querySelector('dialog[open]')) return;
   const s = evPos(ev);
+  if (tool === 'select' && ev.button === 0 && pointers.size === 0) {
+    const box = dimensionAt(s);
+    if (box) { openDimension(box); return; }
+  }
+  canvas.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, s);
   if (pointers.size === 2) {
     // Second finger down: cancel any drag, start pinch-zoom/pan.
-    drag = null;
+    drag = null; toolTap = null; suppressGesture = true;
     const [a, b] = [...pointers.values()];
     pinch = { dist: Math.hypot(a[0] - b[0], a[1] - b[1]), mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
     return;
@@ -220,13 +232,14 @@ canvas.addEventListener('pointerdown', ev => {
   if (ev.pointerType === 'touch' && pointers.size > 1) return;
   if (ev.button === 1 || ev.button === 2) { drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
   if (ev.button !== 0 && ev.pointerType !== 'touch') return;
-  if (tool !== 'select') { canvasClick(s2w(s)); return; }
+  if (suppressGesture) return;
+  if (tool !== 'select') { toolTap = { id: ev.pointerId, screen: s }; return; }
   const g = gripAt(s);
-  if (g) { drag = { mode: 'grip', ...g }; return; }
+  if (g) { drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
   const e = entityAt(s);
   if (e) {
     doc.selectedId = e.id;
-    drag = { mode: 'move', e, start: s2w(s), moved: false };
+    drag = { mode: 'move', e, start: s2w(s), screen: s, pointerId: ev.pointerId, moved: false };
   } else {
     doc.selectedId = null;
   }
@@ -251,28 +264,35 @@ canvas.addEventListener('pointermove', ev => {
     draw();
     return;
   }
-  if (!drag) { draw(); return; }
+  if (suppressGesture || !drag) { draw(); return; }
+  if (drag.mode !== 'pan' && drag.pointerId !== ev.pointerId) return;
+  if (drag.mode !== 'pan' && !drag.undoPushed && !drag.moved && Math.hypot(s[0]-drag.screen[0], s[1]-drag.screen[1]) < 4) return;
   if (drag.mode === 'pan') {
     view.ox = drag.ox + (s[0] - drag.start[0]);
     view.oy = drag.oy + (s[1] - drag.start[1]);
   } else if (drag.mode === 'grip') {
     if (!drag.undoPushed) { pushUndo(); drag.undoPushed = true; }
-    drag.grip.set(mouse);
+    try { drag.grip.set(mouse); } catch { drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
   } else if (drag.mode === 'move') {
     if (!drag.moved) { pushUndo(); drag.moved = true; }
-    moveEntity(drag.e, [mouse[0] - drag.start[0], mouse[1] - drag.start[1]]);
-    drag.start = mouse;
+    try { moveEntity(drag.e, [mouse[0] - drag.start[0], mouse[1] - drag.start[1]]); drag.start = mouse; }
+    catch { drag = null; addMsg('err', 'That move is outside the supported drawing range.'); }
   }
   draw();
 });
 
 function endPointer(ev) {
+  if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
+      Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10) canvasClick(s2w(evPos(ev)));
+  toolTap = null;
   pointers.delete(ev.pointerId);
   if (pointers.size < 2) pinch = null;
-  if (pointers.size === 0 && (drag?.mode === 'pan' || ev.button === 0 || ev.pointerType === 'touch')) drag = null;
+  if (pointers.size === 0) { drag = null; suppressGesture = false; }
+  if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('lostpointercapture', ev => { pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
 canvas.addEventListener('contextmenu', ev => ev.preventDefault());
 
 canvas.addEventListener('wheel', ev => {
@@ -287,62 +307,66 @@ canvas.addEventListener('wheel', ev => {
   draw();
 }, { passive: false });
 
-// Double-click a dimension label → type a value → entity reshapes (driving dim).
-canvas.addEventListener('dblclick', ev => {
-  const s = evPos(ev);
-  const box = dimBoxes.find(b => s[0] >= b.x && s[0] <= b.x + b.w && s[1] >= b.y && s[1] <= b.y + b.h);
-  if (!box) return;
-  const input = document.createElement('input');
-  input.id = 'dim-edit';
-  input.value = Math.round(box.dim.value * 10) / 10;
-  const r = canvas.getBoundingClientRect();
-  input.style.left = (r.left + box.x) + 'px';
-  input.style.top = (r.top + box.y - 6) + 'px';
-  document.body.appendChild(input);
-  input.focus(); input.select();
-  const commit = ok => {
-    const v = parseFloat(input.value);
-    input.remove();
-    if (ok && Number.isFinite(v) && v > 0) {
-      pushUndo();
-      box.dim.set(v);
-      doc.timeline.push({ text: `${box.entity.id} ${box.dim.key} = ${v} mm`, source: 'user', ids: [box.entity.id] });
-      refreshTimeline();
-    }
-    draw();
-  };
-  input.addEventListener('keydown', e2 => {
-    if (e2.key === 'Enter') commit(true);
-    else if (e2.key === 'Escape') commit(false);
-    e2.stopPropagation();
-  });
-  input.addEventListener('blur', () => commit(true));
+// Dimension labels open one accessible editor; dismissing never changes geometry.
+let dimensionBox = null;
+const dimensionDialog = document.getElementById('dimension-dialog');
+function openDimension(box) {
+  dimensionBox = box;
+  document.getElementById('dimension-title').textContent = `${box.entity.id}: ${box.dim.key}`;
+  const input = document.getElementById('dim-edit');
+  input.value = String(box.dim.value);
+  document.getElementById('dimension-error').hidden = true;
+  openDialog(dimensionDialog, input);
+  input.select();
+}
+document.getElementById('dimension-form').addEventListener('submit', ev => {
+  ev.preventDefault();
+  const v = Number(document.getElementById('dim-edit').value);
+  if (!dimensionBox || !doc.entities.includes(dimensionBox.entity)) { dimensionDialog.close(); return; }
+  if (!Number.isFinite(v) || v <= 0 || v > 1e6) {
+    const error = document.getElementById('dimension-error');
+    error.textContent = 'Enter a positive value up to 1,000,000 mm.'; error.hidden = false; return;
+  }
+  if (v !== dimensionBox.dim.value) {
+    pushUndo();
+    applyOps(doc, [{ op: 'set_dimension', id: dimensionBox.entity.id, dimension: dimensionBox.dim.key, value: v }]);
+    refreshTimeline(); draw();
+  }
+  dimensionDialog.close();
 });
 
 // ---- keyboard ----
 window.addEventListener('keydown', ev => {
-  if (ev.target.tagName === 'INPUT') return;
+  if (document.querySelector('dialog[open]')) return;
+  if (ev.key === 'Escape' && timelinePanel.classList.contains('open')) { ev.preventDefault(); setTimeline(false); return; }
+  if (ev.target.closest('input, textarea, select, [contenteditable=true]')) return;
   const k = ev.key.toLowerCase();
   if ((ev.ctrlKey || ev.metaKey) && k === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); redo(); }
   else if (k === 'escape') { pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
+    ev.preventDefault();
     if (doc.selectedId) { pushUndo(); applyOps(doc, [{ op: 'delete', id: doc.selectedId }]); doc.selectedId = null; refreshTimeline(); draw(); }
   }
-  else if ({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]);
+  else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && { v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc' }[k]);
 });
 
 // ---- toolbar / statusbar ----
 function setTool(t) { tool = t; pending = null;
   document.querySelectorAll('#draw-tools .tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   canvas.classList.toggle('selecting', t === 'select');
+  draw();
   setHint(t === 'select' ? '' : 'Click the ' + (t === 'line' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
 }
 document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
-document.getElementById('export-dxf').addEventListener('click', () => download('design.dxf', toDXF(doc), 'application/dxf'));
-document.getElementById('export-svg').addEventListener('click', () => download('design.svg', toSVG(doc), 'image/svg+xml'));
+function exportDrawing(format) {
+  try { download('design.' + format, format === 'dxf' ? toDXF(doc) : toSVG(doc), format === 'dxf' ? 'application/dxf' : 'image/svg+xml'); }
+  catch { addMsg('err', 'Export failed: the drawing contains invalid geometry. Undo the last edit and try again.'); }
+}
+document.getElementById('export-dxf').addEventListener('click', () => exportDrawing('dxf'));
+document.getElementById('export-svg').addEventListener('click', () => exportDrawing('svg'));
 
 const hintEl = document.getElementById('hint');
 const DEFAULT_HINT = hintEl.textContent;
@@ -365,7 +389,9 @@ function refreshTimeline() {
   doc.timeline.forEach((t, i) => {
     const li = document.createElement('li');
     if (t.source === 'ai') li.classList.add('ai-op');
-    li.innerHTML = `<span>${i + 1}. ${t.text}</span><span class="src">${t.source}</span>`;
+    const label = document.createElement('span'); label.textContent = `${i + 1}. ${t.text}`;
+    const source = document.createElement('span'); source.className = 'src'; source.textContent = t.source;
+    li.append(label, source);
     if (t.ids.length && t.ids.every(id => doc.entities.some(e => e.id === id))) {
       const b = document.createElement('button');
       b.textContent = 'select';
@@ -377,165 +403,197 @@ function refreshTimeline() {
   ul.scrollTop = ul.scrollHeight;
 }
 
-// ---- settings ----
-const LS_KEY = 'vectorforge.connection';
-function loadConn() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; }
-  catch { return { ...DEFAULTS }; }
-}
+// ---- panels and dialogs ----
 const dlg = document.getElementById('settings-dialog');
-document.getElementById('settings-btn').addEventListener('click', () => {
-  const c = loadConn();
-  document.getElementById('set-base').value = c.base;
-  document.getElementById('set-model').value = c.model;
-  document.getElementById('set-key').value = c.key || '';
-  document.getElementById('set-relay-url').value = c.relay || '';
-  document.getElementById('set-relay').checked = c.useRelay !== false;
-  dlg.showModal();
-});
-document.getElementById('settings-save').addEventListener('click', ev => {
-  ev.preventDefault();
-  const c = {
-    base: document.getElementById('set-base').value.trim() || DEFAULTS.base,
-    model: document.getElementById('set-model').value.trim() || DEFAULTS.model,
-    key: document.getElementById('set-key').value.trim(),
-    relay: document.getElementById('set-relay-url').value.trim(),
-    useRelay: document.getElementById('set-relay').checked,
-  };
-  try { validateConnection(c); } catch (e) {
-    addMsg('err', 'Connection rejected: only https Alibaba endpoints (qianwenaiapi.com / aliyuncs.com), a valid model name and a key are allowed.');
-    return;
-  }
-  localStorage.setItem(LS_KEY, JSON.stringify(c));
-  dlg.close();
-  addMsg('ai', 'Settings saved. Testing the connection…');
-  testConnection(c);
-});
-
-// ---- timeline drawer toggle ----
 const timelinePanel = document.getElementById('timeline-panel');
-document.getElementById('timeline-toggle').addEventListener('click', () => timelinePanel.classList.toggle('open'));
+const timelineToggle = document.getElementById('timeline-toggle');
+function setTimeline(open, restoreFocus = true) {
+  timelinePanel.classList.toggle('open', open);
+  timelinePanel.inert = !open;
+  timelinePanel.setAttribute('aria-hidden', String(!open));
+  timelineToggle.setAttribute('aria-expanded', String(open));
+  if (open) document.getElementById('timeline-close').focus();
+  else if (restoreFocus) timelineToggle.focus();
+}
+timelineToggle.addEventListener('click', () => setTimeline(!timelinePanel.classList.contains('open')));
+document.getElementById('timeline-close').addEventListener('click', () => setTimeline(false));
+document.addEventListener('pointerdown', ev => {
+  if (timelinePanel.classList.contains('open') && !timelinePanel.contains(ev.target) && !timelineToggle.contains(ev.target)) setTimeline(false, false);
+});
+function openDialog(dialog, focus) {
+  pending = null; drag = null; toolTap = null; pointers.clear(); pinch = null;
+  setTimeline(false, false); draw();
+  if (!dialog.open) dialog.showModal();
+  focus?.focus();
+}
+function wireDialog(dialog, closeIds) {
+  let opener = null, outsideDown = false;
+  dialog.addEventListener('close', () => { opener?.focus(); });
+  dialog.addEventListener('pointerdown', ev => {
+    const r = dialog.getBoundingClientRect();
+    outsideDown = ev.target === dialog && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom);
+  });
+  dialog.addEventListener('click', ev => { if (outsideDown && ev.target === dialog) dialog.close(); outsideDown = false; });
+  for (const id of closeIds) document.getElementById(id).addEventListener('click', () => dialog.close());
+  // Native showModal supplies background inertness, focus trapping, and Escape.
+  return () => { opener = document.activeElement; };
+}
+const rememberSettingsFocus = wireDialog(dlg, ['settings-close', 'settings-cancel']);
+wireDialog(dimensionDialog, ['dimension-close', 'dimension-cancel']);
+dimensionDialog.addEventListener('close', () => { dimensionBox = null; canvas.focus(); });
 
-// ---- connection state + status light ----
-// The AI console is locked until a real round-trip to the model succeeds.
+// ---- per-tab connection; intentionally never persisted ----
+try { localStorage.removeItem('vectorforge.connection'); sessionStorage.removeItem('vectorforge.connection'); } catch { /* Storage may be blocked. */ }
+let connection = { ...DEFAULTS, relay: RELAY, useRelay: true, key: '' };
 const connLight = document.getElementById('conn-light');
 let connState = 'off';
-function setConn(state, detail) {
-  connState = state;
-  connLight.className = state;
-  connLight.title = detail || {
-    off: 'not connected — paste your API key (sk-…)',
-    checking: 'checking connection…',
-    on: 'connected',
-    error: 'connection failed — re-paste key to retry',
-  }[state];
-}
-
-async function testConnection(conn, { quiet = false } = {}) {
-  setConn('checking');
-  try {
-    await askAgent(conn, { question: 'connection_check', history: [], scene: serializeScene(doc) });
-    setConn('on', 'connected — ' + conn.model);
-    if (!quiet) addMsg('ai', `Connected to ${conn.model}. Green light is on — describe a design, e.g. "draw me a star, radius 60".`);
-    return true;
-  } catch (e) {
-    setConn('error');
-    const why = { auth: 'the key was rejected (401/403)', quota: 'quota exhausted on this key',
-      cors: 'the browser blocked the call (CORS) — the CAD relay must be deployed; see server/README.md',
-      relay_missing: 'the CAD relay route /api/cad-chat is not deployed yet — see server/README.md',
-      model: 'model/endpoint mismatch', endpoint: 'endpoint is not an allowed Alibaba https URL' }[e.message];
-    addMsg('err', `Connection test failed${why ? ': ' + why : ' (' + e.message + ')'}. Re-paste the key to retry.`);
-    return false;
-  }
-}
-
-// ---- chat ----
+let activeRequest = null;
 const history = [];
 const chatLog = document.getElementById('chat-log');
+function setConn(state, detail) {
+  connState = state; connLight.className = state;
+  connLight.title = detail || { off: 'Not connected. Paste your API key.', checking: 'Checking connection…', on: 'Connected', error: 'Connection failed. Open API to retry.' }[state];
+  connLight.setAttribute('aria-label', connLight.title);
+}
 function addMsg(cls, text, who) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + cls;
-  const label = document.createElement('span');
-  label.className = 'who';
+  const div = document.createElement('div'); div.className = 'msg ' + cls;
+  const label = document.createElement('span'); label.className = 'who';
   label.textContent = who || (cls === 'user' ? 'you >' : cls === 'err' ? 'error >' : 'ai >');
   div.appendChild(label);
-  div.appendChild(document.createTextNode(text));
-  chatLog.appendChild(div);
-  chatLog.scrollTop = chatLog.scrollHeight;
-  return div;
+  div.appendChild(document.createTextNode(String(text).replace(/sk-[A-Za-z0-9._-]{6,}/g, '[redacted]')));
+  chatLog.appendChild(div); chatLog.scrollTop = chatLog.scrollHeight; return div;
 }
+function setBusy(busy) {
+  document.getElementById('cancel-request').hidden = !busy;
+  document.getElementById('send-btn').disabled = busy;
+  document.getElementById('chat-form').setAttribute('aria-busy', String(busy));
+}
+function cancelRequest(message = 'Request stopped. Nothing from it was applied.') {
+  if (!activeRequest) return;
+  const request = activeRequest; activeRequest = null;
+  request.controller.abort(); request.thinking?.remove();
+  if (request.kind === 'connect') setConn('off');
+  setBusy(false);
+  if (message) addMsg('ai', message);
+}
+function cancelDesignRequest() {
+  if (activeRequest?.kind === 'design') cancelRequest('Drawing changed. The pending AI request was stopped; send it again to use the current scene.');
+}
+document.getElementById('cancel-request').addEventListener('click', () => cancelRequest());
+const ERRORS = {
+  origin: 'The relay rejected this website origin. Its allowed origins must include this app.',
+  request: 'The relay rejected the request format. Check that the app and relay versions match.',
+  scene_required: 'The relay could not read the drawing scene. Check that the app and relay versions match.',
+  content_type: 'The relay rejected the request content type.',
+  size: 'The drawing request is too large for the relay. Try a smaller scene.',
+  rate_limit: 'The relay is busy or its request limit was reached. Wait a moment and retry.',
+  configuration: 'The relay endpoint or model configuration is invalid.',
+  connection: 'The relay could not reach the provider. Check the endpoint and retry.',
+  auth: 'The API key was rejected (401/403). Check your key and endpoint.',
+  quota: 'The provider or relay rate limit was reached. Check your quota or retry shortly.',
+  cors: 'Cannot reach the relay or provider. Check the relay URL and network; this can also be a CORS configuration problem.',
+  relay_missing: 'The CAD relay returned 404. Its /api/cad-chat route must be deployed.',
+  relay: 'Use the configured CAD relay host, or a localhost /api/cad-chat development route.',
+  endpoint: 'Choose a supported Alibaba API endpoint.', credentials: 'Enter a valid sk-… key and model name.',
+  model: 'The model and endpoint do not match. Check API settings.',
+  invalid: 'The model returned invalid drawing operations. Nothing was applied.',
+  response: 'The provider returned an unreadable response. Nothing was applied.',
+  timeout: 'The request timed out. Try again.', provider: 'The provider is unavailable. Try again later.',
+};
+function errorText(error) { return ERRORS[error.message] || 'The request could not be completed. Nothing was applied. Try a smaller request.'; }
+async function testConnection(config) {
+  cancelRequest(null);
+  connection = config; history.length = 0;
+  const request = { kind: 'connect', controller: new AbortController() };
+  activeRequest = request; setBusy(true); setConn('checking');
+  try {
+    await askAgent(config, { question: 'connection_check', history: [], scene: { units: 'mm', entities: [] } }, request.controller.signal);
+    if (activeRequest !== request) return;
+    setConn('on', 'Connected to ' + config.model);
+    addMsg('ai', `Connected to ${config.model}. Describe a design, or use the drawing tools.`);
+  } catch (error) {
+    if (activeRequest !== request) return;
+    setConn('error'); addMsg('err', 'Connection test failed. ' + errorText(error));
+  } finally { if (activeRequest === request) { activeRequest = null; setBusy(false); } }
+}
+document.getElementById('settings-btn').addEventListener('click', () => {
+  rememberSettingsFocus();
+  for (const name of ['base', 'model']) document.getElementById('set-' + name).value = connection[name];
+  document.getElementById('set-key').value = '';
+  document.getElementById('set-relay-url').value = connection.relay;
+  document.getElementById('set-relay').checked = connection.useRelay;
+  document.getElementById('settings-error').hidden = true;
+  openDialog(dlg, document.getElementById('settings-close'));
+});
+dlg.addEventListener('close', () => { document.getElementById('set-key').value = ''; });
+document.getElementById('settings-form').addEventListener('submit', ev => {
+  ev.preventDefault();
+  let config;
+  try { config = validateConnection({
+    base: document.getElementById('set-base').value.trim() || DEFAULTS.base,
+    model: document.getElementById('set-model').value.trim() || DEFAULTS.model,
+    key: document.getElementById('set-key').value.trim() || connection.key,
+    relay: document.getElementById('set-relay-url').value.trim() || RELAY,
+    useRelay: document.getElementById('set-relay').checked,
+  }); } catch (error) {
+    const feedback = document.getElementById('settings-error'); feedback.textContent = errorText(error); feedback.hidden = false; return;
+  }
+  dlg.close(); addMsg('ai', 'Checking the connection…'); testConnection(config);
+});
+document.getElementById('settings-disconnect').addEventListener('click', () => {
+  cancelRequest(null); connection.key = ''; history.length = 0; setConn('off'); dlg.close();
+  addMsg('ai', 'Disconnected. The key has been cleared from this tab.');
+});
 
 document.getElementById('chat-form').addEventListener('submit', async ev => {
   ev.preventDefault();
   const input = document.getElementById('chat-input');
-  const q = input.value.trim();
-  if (!q) return;
-  input.value = '';
-  // Connect by pasting the key into the console: "sk-..." or "key sk-...".
+  const q = input.value.trim(); if (!q) return;
   const keyMatch = /^(?:key|api[- ]?key)?\s*[:=]?\s*(sk-[\w.\-]{6,})$/i.exec(q);
   if (keyMatch) {
-    const c = { ...loadConn(), key: keyMatch[1] };
-    try {
-      validateConnection(c);
-      localStorage.setItem(LS_KEY, JSON.stringify(c));
-      addMsg('ai', 'Key saved. Testing the connection…');
-      testConnection(c);
-    } catch { addMsg('err', 'That key was rejected (format check failed). Nothing was saved.'); }
+    input.value = '';
+    try { const config = validateConnection({ ...connection, key: keyMatch[1] }); addMsg('ai', 'Key received for this tab only. Checking the connection…'); testConnection(config); }
+    catch (error) { addMsg('err', errorText(error)); }
     return;
   }
-  addMsg('user', q);
-  const conn = loadConn();
-  if (connState !== 'on') {
-    addMsg('err', !conn.key
-      ? 'No confirmed API connection. Paste your Qwen API key (sk-…) here and wait for the green light.'
-      : connState === 'checking'
-        ? 'Still checking the connection — one moment.'
-        : 'No confirmed connection (red light). Re-paste your key to retry, or check API settings.');
-    return;
-  }
-  const thinking = addMsg('ai', '…', 'ai >');
+  // Never echo or send a secret pasted as part of a larger command.
+  if (/sk-/i.test(q)) { input.value = ''; addMsg('err', 'Paste the API key by itself or use API settings. The text was not sent or displayed.'); return; }
+  if (activeRequest) { addMsg('err', 'A request is running. Wait, or use Stop first.'); return; }
+  if (connState !== 'on') { addMsg('err', 'Paste your API key or open API to connect first. Manual drawing and export work offline.'); return; }
+  if (q.length > 1600) { addMsg('err', 'Keep the design request under 1,600 characters.'); return; }
+  input.value = ''; addMsg('user', q);
+  const request = { kind: 'design', controller: new AbortController(), thinking: addMsg('ai', 'Working…') };
+  const scene = serializeScene(doc), sceneBefore = JSON.stringify(scene);
+  activeRequest = request; setBusy(true);
   try {
-    const scene = serializeScene(doc);
-    const res = await askAgent(conn, { question: q, history, scene });
-    thinking.remove();
-    addMsg('ai', res.reply);
-    history.push({ role: 'user', content: q }, { role: 'assistant', content: res.reply });
-    if (res.ops.length) {
-      pushUndo();
-      const { created } = applyOps(doc, res.ops, 'ai');
-      if (created.length) doc.selectedId = created[created.length - 1];
-      refreshTimeline();
-      draw();
+    const result = await askAgent(connection, { question: q, history, scene }, request.controller.signal);
+    if (activeRequest !== request) return;
+    if (JSON.stringify(serializeScene(doc)) !== sceneBefore) { cancelRequest('The selection or drawing changed. Send the request again for the current scene.'); return; }
+    // Validate/apply atomically before recording success, and avoid cancelling ourselves.
+    activeRequest = null;
+    if (result.ops.length) {
+      const before = snapshot();
+      const { created } = applyOps(doc, result.ops, 'ai');
+      undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0;
+      if (created.length) doc.selectedId = created.at(-1);
+      refreshTimeline(); draw();
     }
-  } catch (e) {
-    thinking.remove();
-    if (['auth', 'endpoint', 'model'].includes(e.message)) setConn('error');
-    const why = { auth: 'Authentication failed — the key was rejected; re-paste it to retry.',
-      quota: 'Quota exhausted on this key.',
-      cors: 'The browser blocked the call (CORS). Alibaba endpoints cannot be called directly — deploy the CAD relay (server/README.md) or check the relay URL under API.',
-      relay_missing: 'The CAD relay route is not deployed on the relay host yet (404). Deploy server/cad-relay-route.ts as /api/cad-chat — see server/README.md.',
-      endpoint: 'Endpoint rejected — only Alibaba https endpoints are allowed.',
-      model: 'Model/endpoint mismatch — check API settings.',
-      invalid: 'The model returned ops outside the schema; nothing was drawn.',
-      truncated: 'The response was cut off; try a smaller request.' }[e.message];
-    addMsg('err', why || ('Request failed: ' + e.message));
-  }
+    request.thinking.remove(); addMsg('ai', result.reply);
+    history.push({ role: 'user', content: q }, { role: 'assistant', content: result.reply });
+    if (history.length > 12) history.splice(0, history.length - 12);
+  } catch (error) {
+    if (request.controller.signal.aborted) return;
+    request.thinking.remove();
+    if (error.message === 'auth') setConn('error');
+    addMsg('err', errorText(error));
+  } finally { if (!activeRequest || activeRequest === request) { activeRequest = null; setBusy(false); } }
 });
 
 // ---- boot ----
 view.ox = canvas.clientWidth / 2 || 500;
 view.oy = canvas.clientHeight / 2 || 400;
+window.addEventListener('blur', () => { drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
 window.addEventListener('resize', resize);
-resize();
-refreshTimeline();
-addMsg('ai', 'VectorForge ready. Paste your Qwen API key (sk-…) here to connect — the light turns green only after a successful test call. Then describe a design, or draw with the chips below.');
-// If a key was saved previously, re-verify it on load before unlocking the AI.
-{
-  const saved = loadConn();
-  if (saved.key) {
-    addMsg('ai', 'Saved key found — verifying…');
-    testConnection(saved, { quiet: true }).then(ok => {
-      if (ok) addMsg('ai', `Reconnected to ${saved.model}. Green light is on.`);
-    });
-  }
-}
+new ResizeObserver(resize).observe(canvas);
+resize(); refreshTimeline(); setTool('select');
+addMsg('ai', 'VectorForge ready. Paste your Qwen API key by itself to connect for this tab only. Keys pass through the CAD relay to Alibaba. Or draw offline with the tools below.');

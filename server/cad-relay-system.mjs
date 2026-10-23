@@ -14,3 +14,4 @@ Ops (omit unused fields):
 {"op":"set_dimension","id":"e2","dimension":"length|radius|width|height","value":v} edits a driving dimension; the entity rescales.
 {"op":"delete","id":"e1"}  {"op":"clear"}
 Prefer construction with parameters over raw coordinate lists: use set_dimension for sizes, move for placement. Compose designs from primitives (a gear = circle + star teeth; a plate = rect + circles for holes). Keep every design dimensioned — never leave the user with an undimensioned shape. Sizes the user states are exact; honour them with set_dimension or the radius/width fields. If you cannot fulfil a request, explain briefly and return ops:[]. Never claim an op succeeded before it runs.`;
+

@@ -37,7 +37,7 @@ turn. The design principles, in order of importance:
 5. **Never trust the model's output.** All ops are schema-validated before
    execution; invalid responses get one bounded repair retry; nothing is
    applied partially. Same discipline for the network: the API key is only
-   ever sent to whitelisted Alibaba domains, and the light stays red until a
+   ever sent to the configured CAD relay and whitelisted Alibaba domains, and the light stays red until a
    real round-trip succeeds.
 6. **CAD conventions over chat conventions.** The UI follows Rhino's model: a
    3–5 line monospace command console on top, small tool chips under it, the
@@ -48,15 +48,16 @@ turn. The design principles, in order of importance:
 
 - Parametric entities: line, circle, arc, rect, polygon, star
 - Grip dragging (endpoints, radius points, vertices, arc angles) with live
-  dimension readout; double-click/double-tap a dimension to type a driving value
+  dimension readout; click/tap a dimension to type a driving value
 - Pan (middle/right/two-finger drag), zoom (wheel/pinch), adaptive mm grid
 - Undo/redo (document snapshots), delete, keyboard shortcuts (V L C R S A)
 - Timeline: every op (human or AI) is a listed entry; the seed of a future
   parametric feature tree
 - AI console: paste an `sk-…` key to connect; connection is **verified with a
   real test call** before the AI unlocks; status light in the prompt row
-  (grey → amber → green/red); saved keys are re-verified on load
-- Export: DXF R12 (LINE/CIRCLE/ARC/LWPOLYLINE, y-up mm) and SVG
+  (grey → amber → green/red); keys stay in memory for this tab only and
+  are cleared on reload or Disconnect
+- Export: DXF R2000 (LINE/CIRCLE/ARC/LWPOLYLINE, y-up mm) and SVG
 - Mobile: full touch support, keypad-sized chips, 3-line console
 
 ## Architecture
@@ -69,7 +70,7 @@ js/model.mjs    parametric entities, grips, driving dimensions, ops executor,
 js/agent.mjs    Qwen connection (endpoint whitelist, relay fallback),
                 ops schema validation, repair retry
 js/main.mjs     canvas rendering, interaction, dimension editing, console
-js/dxf.mjs      DXF R12 + SVG export
+js/dxf.mjs      DXF R2000 + SVG export
 server/         CAD relay (see below) + its system prompt + deploy docs
 ```
 
@@ -100,8 +101,7 @@ Alibaba endpoints send **no CORS headers**, so browsers cannot call them
 directly. Requests go through a relay — the same pattern as the robot
 simulator's relay, but a **separate CAD route** (`/api/cad-chat`), because the
 robot relay validates robot-specific scenes and injects the robot system
-prompt. The CAD relay (`server/cad-relay-route.ts`) holds the API key
-server-side, whitelists origins, validates the scene envelope
+prompt. The CAD relay (`server/cad-relay-route.ts`) forwards the per-request browser key without storing it, whitelists origins, validates the scene envelope
 (`{question, scene:{units, entities:[...]}}`), rate-limits, and injects the
 CAD system prompt server-side. Deploy it before expecting a green light;
 see `server/README.md`.
@@ -136,3 +136,18 @@ see `server/README.md`.
 - Keep the app dependency-free and build-free; it must run from GitHub Pages
   by opening `index.html` over HTTP.
 - Coordinates y-up, millimetres, everywhere except screen space.
+
+
+## Run and verify
+
+Serve this directory over HTTP, for example `python3 -m http.server 4226`,
+then open `http://localhost:4226`. There is no frontend build or install step.
+Use Node 24+ for `npm run check` and `npm test`; all tests use mocked provider
+responses, never real credentials or paid API calls. GitHub Actions runs these
+checks for pushes and pull requests.
+
+API and dimension dialogs have a visible close button, Cancel, Escape, and
+outside-click dismissal. The closed Timeline is inert. The Stop button cancels
+in-flight requests; changing the drawing discards stale AI results. API keys
+are never written to localStorage/sessionStorage or echoed into the console.
+The app removes the old persisted `vectorforge.connection` entry on startup.
