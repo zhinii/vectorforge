@@ -1,5 +1,5 @@
 // DXF R2000 (ASCII) + exact SVG export. Model and DXF coordinates are y-up.
-import { entityPoints, isClosed, arcAngles, normalizeAngle } from './model.mjs?v=20261023-1';
+import { entityPoints, isClosed, arcAngles, normalizeAngle } from './model.mjs?v=20261023-2';
 
 function checkEntity(e) {
   const finite = v => typeof v === 'number' && Number.isFinite(v);
