@@ -53,7 +53,7 @@ class Element {
   set textContent(value) { this._text = String(value); this.children = []; }
   set innerHTML(value) { assert.equal(value, ''); this.children = []; this._text = ''; }
 }
-function setup() {
+function setup({ deferredHealth = false, quickTimeout = false } = {}) {
   i18n.setLanguage('en');
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const document = new Element('document'); document.ownerDocument = document; document.activeElement = document;
@@ -80,9 +80,13 @@ function setup() {
   const storage = { removeItem: key => storageCalls.push(['remove', key]), setItem: (...args) => { storageCalls.push(['set', ...args]); } };
   const requests = [];
   const healthCalls = [];
-  const fetcher = (url, options) => { if (options.method === 'GET') { healthCalls.push({url,options}); return Promise.resolve({ok:true,status:200,json:async()=>({service:'VectorForge CAD connection',configured:true,auth:'server+byok',defaultMode:'server',serverConfigured:true,serverModel:'qwen3.8-flash',version:2})}); } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
+  const healthResult = (status=200,configured=true) => ({ok:status<400,status,json:async()=>({service:'VectorForge CAD connection',configured:true,auth:'server+byok',defaultMode:'server',serverConfigured:configured,serverModel:'qwen3.8-flash',version:2})});
+  const fetcher = (url, options) => { if (options.method === 'GET') {
+    if (!deferredHealth) {healthCalls.push({url,options});return Promise.resolve(healthResult());}
+    return new Promise((resolve,reject)=>{healthCalls.push({url,options,resolve,reject});options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});
+  } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
   const context = vm.createContext({ ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
-    AbortController, URL, console, setTimeout, clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
+    AbortController, URL, console, setTimeout:(fn,ms)=>setTimeout(fn,quickTimeout && ms===10000 ? 1 : ms), clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
   const source = readFileSync(new URL('../js/main.mjs', import.meta.url), 'utf8').replace(/^import[^]*?from\s+'[^']+';\s*/gm, '');
   vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled });', context, { filename: 'main.mjs' });
   const el = id => document.getElementById(id);
@@ -94,7 +98,7 @@ function setup() {
   const tap = async (x, y, extra = {}) => { await pointer('pointerdown', x, y, extra); await pointer('pointerup', x, y, extra); };
   const tool = async name => elements.find(e => e.dataset.tool === name).dispatch('click');
   const connect = async () => { await submit('chat-form', 'sk-testdummy12345'); await respond(requests.length - 1); assert.equal(context.inspect().connState, 'on'); };
-  return { el, click, document, window, html, storageCalls, requests, respond, submit, pointer, tap, tool, connect, tick, state: context.inspect, log: () => el('chat-log').textContent };
+  return { el, click, document, window, html, storageCalls, healthCalls, healthResult, requests, respond, submit, pointer, tap, tool, connect, tick, state: context.inspect, log: () => el('chat-log').textContent };
 }
 
 test('startup HTML IDs, offline canvas, accessible dialog controls, and no persistent keys', () => {
@@ -425,8 +429,8 @@ test('language switch translates static, live dimension, errors and AI task with
   await h.click('language-toggle'); assert.equal(h.el('language-toggle').textContent,'中文'); assert.equal(h.el('copy-selected').textContent,'Copy');
 });
 
-test('saved-server mode starts ready without a provider call, then connects without browser key', async () => {
-  const h=setup(); await h.tick(); assert.equal(h.state().connState,'ready'); assert.equal(h.requests.length,0);
+test('saved-server mode requires explicit Connect before drawing without browser key', async () => {
+  const h=setup(); await h.tick(); assert.equal(h.state().connState,'off'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.healthCalls.length,0); await h.click('connect-btn'); await h.tick(); assert.equal(h.state().connState,'ready'); assert.equal(h.requests.length,0);
   const done=h.submit('chat-form','draw a circle');
   assert.equal(h.requests[0].options.headers['X-VectorForge-Auth'],'server');
   assert.equal(h.requests[0].options.headers.Authorization,undefined);
@@ -460,10 +464,40 @@ test('default nearby labels form non-overlapping stack and retain a manually dra
 
 test('console Connect hides at server readiness, returns after error, and never spends on health check', async () => {
   const h=setup(); assert.doesNotMatch(h.html,/id="settings-btn"/); assert.equal(h.el('connect-btn').parent.id,'chat-form');
-  await h.tick(); assert.equal(h.el('connect-btn').hidden,true); assert.equal(h.requests.length,0);
+  await h.tick(); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.healthCalls.length,0); assert.equal(h.requests.length,0);
+  await h.click('connect-btn'); await h.tick(); assert.equal(h.el('connect-btn').hidden,true);
   await h.click('conn-light'); await h.click('settings-disconnect'); assert.equal(h.el('connect-btn').hidden,false);
   await h.click('connect-btn'); await h.tick(); assert.equal(h.el('connect-btn').hidden,true); assert.equal(h.requests.length,0); assert.equal(h.state().connState,'ready');
   const done=h.submit('chat-form','circle'); await h.respond(0,{},401); await done;
   assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.state().connState,'error');
   await h.click('connect-btn'); await h.tick(); assert.equal(h.requests.length,1); assert.equal(h.el('connect-btn').hidden,true);
+});
+
+test('explicit console handshake is singleflight and reports success without provider request', async () => {
+  const h=setup({deferredHealth:true}); await h.tick(); assert.equal(h.healthCalls.length,0);
+  await h.click('connect-btn'); assert.equal(h.state().connState,'checking'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.el('connect-btn').disabled,true);
+  await h.click('connect-btn'); await h.click('conn-light'); h.el('set-relay-url').value='http://localhost:4226/api/cad-chat'; await h.el('settings-form').dispatch('submit');
+  assert.equal(h.healthCalls.length,1); assert.notEqual(h.state().connection.relay,'http://localhost:4226/api/cad-chat');
+  await h.click('settings-close'); h.healthCalls[0].resolve(h.healthResult()); await h.tick();
+  assert.equal(h.state().connState,'ready'); assert.equal(h.el('connect-btn').hidden,true); assert.match(h.log(),/Connected to drawing service/); assert.equal(h.requests.length,0);
+  assert.equal((h.log().match(/Checking the connection/g)||[]).length,1); assert.equal((h.log().match(/Connected to drawing service/g)||[]).length,1);
+});
+
+test('settings handshake closes dialog and displays Chinese readiness rather than silent checking', async () => {
+  const h=setup({deferredHealth:true}); await h.click('language-toggle'); await h.click('conn-light'); await h.el('settings-form').dispatch('submit');
+  assert.equal(h.el('settings-dialog').open,false); assert.equal(h.healthCalls.length,1); assert.equal(h.state().connState,'checking');
+  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.match(h.log(),/已连接绘图服务/); assert.equal(h.requests.length,0);
+});
+
+test('stopped health cannot hide Connect and health failure can retry cleanly', async () => {
+  const h=setup({deferredHealth:true}); await h.click('connect-btn'); await h.click('cancel-request');
+  h.healthCalls[0].resolve(h.healthResult()); await h.tick(); assert.equal(h.state().connState,'off'); assert.equal(h.el('connect-btn').hidden,false); assert.doesNotMatch(h.log(),/Connected to drawing service/);
+  await h.click('connect-btn'); h.healthCalls[1].resolve(h.healthResult(200,false)); await h.tick();
+  assert.equal(h.state().connState,'error'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.el('connect-btn').disabled,false); assert.match(h.log(),/not configured/);
+  await h.click('connect-btn'); h.healthCalls[2].resolve(h.healthResult()); await h.tick(); assert.equal(h.state().connState,'ready'); assert.equal(h.requests.length,0);
+});
+
+test('health timeout restores enabled Connect and reports timeout', async () => {
+  const h=setup({deferredHealth:true,quickTimeout:true}); await h.click('connect-btn'); await new Promise(r=>setTimeout(r,10)); await h.tick();
+  assert.equal(h.state().connState,'error'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.el('connect-btn').disabled,false); assert.equal(h.el('send-btn').disabled,false); assert.match(h.log(),/timed out/); assert.equal(h.requests.length,0);
 });

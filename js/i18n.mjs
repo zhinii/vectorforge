@@ -2,6 +2,7 @@
 // operation names in model data or user/AI conversation content implicitly.
 export const catalogs = Object.freeze({
   en: Object.freeze({
+  "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.",
   "VectorForge — AI 2D CAD": "VectorForge — AI 2D CAD",
   "Design command or API key": "Design command or API key",
   "command or design request… (paste sk-… key to connect)": "command or design request… (paste sk-… key to connect)",
@@ -183,7 +184,7 @@ export const catalogs = Object.freeze({
   "The prototype server key is not configured. Use your own key in API settings or contact the app owner.": "The prototype server key is not configured. Use your own key in API settings or contact the app owner.",
   "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.": "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.",
   "Use Connect in the console. Manual drawing and export work offline.": "Use Connect in the console. Manual drawing and export work offline.",
-  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.",
+  "VectorForge ready. Click Connect to use the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge ready. Click Connect to use the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.",
   "user": "user",
   "Text": "Text",
   "text": "text",
@@ -201,6 +202,7 @@ export const catalogs = Object.freeze({
   "That text is outside the supported drawing range.": "That text is outside the supported drawing range."
 }),
   zh: Object.freeze({
+  "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "已连接绘图服务。请发送绘图指令；首次响应将验证 AI 服务商连接。",
   "VectorForge — AI 2D CAD": "VectorForge — AI 二维 CAD",
   "Design command or API key": "设计指令或 API 密钥",
   "command or design request… (paste sk-… key to connect)": "输入指令或设计需求…（粘贴 sk-… 密钥连接）",
@@ -382,7 +384,7 @@ export const catalogs = Object.freeze({
   "The prototype server key is not configured. Use your own key in API settings or contact the app owner.": "原型服务器尚未配置密钥。请在 API 设置中使用自己的密钥，或联系应用所有者。",
   "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.": "连接模式与密钥冲突。请选择无需输入密钥的服务器模式，或使用自己的 API 密钥。",
   "Use Connect in the console. Manual drawing and export work offline.": "请打开 API 设置连接。手动绘图和导出支持离线使用。",
-  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge 已就绪。原型使用服务器已保存的密钥，无需粘贴或登录。可通过连接状态灯打开高级连接设置。手动绘图和导出支持离线使用。",
+  "VectorForge ready. Click Connect to use the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge 已就绪。点击连接即可使用服务器已保存的密钥，无需粘贴或登录。可通过连接状态灯打开高级连接设置。手动绘图和导出支持离线使用。",
   "user": "手动",
   "Text": "文字",
   "text": "文字",
