@@ -1,10 +1,10 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-7';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-7';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-7';
-import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-7';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-7';
+         distanceToEntity, moveEntity, isClosed, arcAngles } from './model.mjs?v=20261023-8';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-8';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-8';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261023-8';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-8';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -58,6 +58,42 @@ function drawingPoint(point) {
     excludeIds: drag?.e ? [drag.e.id] : [],
   }) : null;
   return snapTarget?.point || point;
+}
+
+// Body moves snap geometry, not the cursor. Keep the initial anchors and raw
+// grab point fixed throughout the gesture, so corrections never accumulate or
+// shift the user's grab offset when leaving a target or switching snapping off.
+function translationAnchors(e) {
+  const mid = (a,b) => [a[0]/2+b[0]/2,a[1]/2+b[1]/2];
+  if (e.type === 'text') return [e.c.slice()];
+  if (e.type === 'bezier') return [e.p1.slice(), e.p2.slice(), [
+    e.p1[0]/8+e.c1[0]*3/8+e.c2[0]*3/8+e.p2[0]/8,
+    e.p1[1]/8+e.c1[1]*3/8+e.c2[1]*3/8+e.p2[1]/8,
+  ]]; // Actual cubic midpoint, never its off-outline control handles.
+  if (e.type === 'circle' || e.type === 'arc') {
+    const { start, sweep } = e.type === 'arc' ? arcAngles(e) : { start:0, sweep:360 };
+    const angles = e.type === 'arc' ? [start,start+sweep/2,start+sweep] : [0,90,180,270];
+    return [e.c.slice(), ...angles.map(a => [e.c[0]+e.r*Math.cos(a*Math.PI/180),e.c[1]+e.r*Math.sin(a*Math.PI/180)])];
+  }
+  const points = entityPoints(e).map(p=>p.slice());
+  const count = isClosed(e) ? points.length : points.length-1;
+  return [...points, ...Array.from({length:count},(_,i)=>mid(points[i],points[(i+1)%points.length])),
+    ...(e.c ? [e.c.slice()] : [])];
+}
+function translationSnap(anchors, offset, entityId) {
+  let best = null;
+  for (const anchor of anchors) {
+    const point = anchor.map((v,i)=>v+offset[i]);
+    for (const candidate of snapCandidates(point, doc.entities, {
+      scale:view.s, tolerancePx:COARSE ? 18 : 10, excludeIds:[entityId],
+    })) {
+      // Minimum translation wins; discrete-priority ordering breaks equal
+      // distances from the same anchor without attracting to a farther point.
+      if (!best || candidate.distancePx < best.distancePx-1e-9)
+        best = {...candidate, correction:candidate.point.map((v,i)=>v-point[i])};
+    }
+  }
+  return best;
 }
 
 // ---- drawing tools (click-click) ----
@@ -333,7 +369,7 @@ canvas.addEventListener('pointerdown', ev => {
   const e = entityAt(s);
   if (e) {
     doc.selectedId = e.id;
-    drag = { mode: 'move', e, start: s2w(s), screen: s, pointerId: ev.pointerId, moved: false };
+    drag = { mode: 'move', e, start: s2w(s), anchors:translationAnchors(e), applied:[0,0], screen: s, pointerId: ev.pointerId, moved: false };
   } else {
     doc.selectedId = null;
   }
@@ -372,7 +408,13 @@ canvas.addEventListener('pointermove', ev => {
     try { drag.grip.set(mouse); } catch { drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
   } else if (drag.mode === 'move') {
     if (!drag.moved) { pushUndo(); drag.moved = true; }
-    try { moveEntity(drag.e, [mouse[0] - drag.start[0], mouse[1] - drag.start[1]]); drag.start = mouse; }
+    try {
+      const offset = s2w(s).map((v,i)=>v-drag.start[i]);
+      snapTarget = snapEnabled ? translationSnap(drag.anchors, offset, drag.e.id) : null;
+      const applied = offset.map((v,i)=>v+(snapTarget?.correction[i] || 0));
+      moveEntity(drag.e, applied.map((v,i)=>v-drag.applied[i]));
+      drag.applied = applied;
+    }
     catch { drag = null; addMsg('err', 'That move is outside the supported drawing range.'); }
   }
   draw();

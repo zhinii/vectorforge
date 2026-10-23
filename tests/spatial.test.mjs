@@ -127,7 +127,9 @@ const measure=(a,b)=>nearbyMeasurements(a,[a,b])[0];
   assert.equal(snapPoint([4,6],[b],{tolerancePx:.01}).kind,'midpoint');
   assert.equal(snapPoint([0,8],[b],{tolerancePx:.01}),null);
   assert.equal(snapPoint([4,6],[b],{mode:'perpendicular',from:[4,10]}),null);
-  assert.equal(nearestPointOnEntity([0,8],b),null);
+  assert.ok(nearestPointOnEntity([0,8],b));
+  assert.equal(snapPoint([4,8],[b],{tolerancePx:.01}),null);
+  assert.equal(snapPoint([4,6],[b],{mode:'tangent',from:[4,10]}),null);
   assert.deepEqual(nearbyMeasurements(circle(),[b]),[]);assert.deepEqual(nearbyMeasurements(b,[circle()]),[]);
  });
  test('helpers are read-only, finite for coincident geometry, and reject nonfinite pointers',()=>{
@@ -140,3 +142,82 @@ const measure=(a,b)=>nearbyMeasurements(a,[a,b])[0];
   assert.equal(snapPoint([NaN,0],entities),null);
   assert.equal(nearestPointOnEntity([Infinity,0],entities[0]),null);
  });
+
+// Independent Bernstein evaluation for known curve points and test oracles.
+const cubicAt=(e,t)=>[0,1].map(i=>(1-t)**3*e.p1[i]+3*(1-t)**2*t*e.c1[i]+3*(1-t)*t*t*e.c2[i]+t**3*e.p2[i]);
+const cubic=(p1,c1,c2,p2)=>({id:'cubic',type:'bezier',p1,c1,c2,p2});
+const parabola=cubic([0,0],[100/3,0],[200/3,100/3],[100,100]);
+
+test('Bezier nearest snaps cover arbitrary parameters, using screen tolerance at extreme zoom',()=>{
+  for (const scale of [.25,1,10000,1e8]) {
+    const t=.237,expected=cubicAt(parabola,t),normal=[-2*t,1],length=Math.hypot(...normal);
+    const pointer=expected.map((v,i)=>v+normal[i]/length*2/scale);
+    const hit=snapPoint(pointer,[parabola],{scale,tolerancePx:3});
+    assert.equal(hit.kind,'nearest');
+    assert.ok(dist(hit.point,expected)*scale<.01,`foot error at scale ${scale}`);
+    close(hit.distancePx,2,.001);
+    assert.equal(snapPoint(pointer,[parabola],{scale,tolerancePx:1}),null);
+    assert.equal(snapPoint(pointer,[parabola],{scale,tolerancePx:3,excludeIds:[parabola.id]}),null);
+    pointClose(nearestPointOnEntity(pointer,parabola,{scale}),expected,.01/scale);
+  }
+});
+
+test('Bezier nearest does not displace endpoint/midpoint priority or mutate geometry',()=>{
+  const b=cubic([0,0],[0,80],[80,80],[80,0]),before=JSON.stringify(b);
+  assert.equal(snapPoint([.1,.1],[b],{tolerancePx:1}).kind,'endpoint');
+  assert.equal(snapPoint([40,60.1],[b],{tolerancePx:1}).kind,'midpoint');
+  const hits=snapCandidates([40,60.1],[b],{tolerancePx:1});
+  assert.ok(hits.some(c=>c.kind==='nearest'));
+  nearestPointOnEntity([-100,-100],b)[0]=999;
+  assert.equal(JSON.stringify(b),before);
+});
+
+test('adaptive Bezier search handles closed loops and competing nearest branches',()=>{
+  const loop=cubic([0,0],[200,300],[-200,300],[0,0]);
+  for (const pointer of [[20,80],[-20,80],[0,150],[5,-10],[0,225]]) {
+    const actual=nearestPointOnEntity(pointer,loop,{scale:100});
+    // Dense sampling is only a test oracle, not the implementation. Refine the
+    // best sample independently with golden-section distance minimization.
+    let index=0,best=Infinity;
+    for (let i=0;i<=4000;i++) {
+      const d=dist(pointer,cubicAt(loop,i/4000));
+      if (d<best) {best=d;index=i;}
+    }
+    let lo=Math.max(0,(index-1)/4000),hi=Math.min(1,(index+1)/4000);
+    for (let i=0;i<70;i++) {
+      const a=hi-(hi-lo)*.6180339887498949,b=lo+(hi-lo)*.6180339887498949;
+      if (dist(pointer,cubicAt(loop,a))<dist(pointer,cubicAt(loop,b))) hi=b; else lo=a;
+    }
+    const reference=Math.min(dist(pointer,cubicAt(loop,(lo+hi)/2)),dist(pointer,loop.p1),dist(pointer,loop.p2));
+    close(dist(pointer,actual),reference,1e-7);
+  }
+  const expected=cubicAt(loop,.1937);
+  const hit=snapPoint(expected,[loop],{scale:1e7,tolerancePx:1});
+  assert.equal(hit.kind,'nearest');assert.ok(dist(hit.point,expected)*1e7<.01);
+});
+
+test('Bezier cusp, collinear reversal and collapsed curves remain finite and snappable',()=>{
+  // x=1000(t-.3)^2 and y=1000(t-.3)^3 have a non-midpoint cusp.
+  const cusp=cubic([90,-27],[-110,63],[70/3,-147],[490,343]);
+  const hit=snapPoint([-1e-8,0],[cusp],{scale:1e8,tolerancePx:2});
+  assert.equal(hit.kind,'nearest');assert.ok(dist(hit.point,[0,0])*1e8<.01);
+  const reversed=cubic([0,0],[300,0],[-300,0],[0,0]);
+  pointClose(nearestPointOnEntity([50,1],reversed),[50,0],1e-6);
+  assert.equal(snapPoint([50,1],[reversed],{tolerancePx:2}).kind,'nearest');
+  const collapsed=cubic([2,3],[2,3],[2,3],[2,3]);
+  pointClose(nearestPointOnEntity([7,9],collapsed),[2,3]);
+  assert.equal(snapPoint([2,3],[collapsed],{tolerancePx:0}).kind,'endpoint');
+  assert.equal(snapPoint([10,10],[collapsed],{tolerancePx:1}),null);
+});
+
+test('Bezier search tolerates tiny geometry, translated coordinates, and malformed controls',()=>{
+  for (const [factor,offset,scale] of [[1e-8,0,1e10],[1,1e9,100]]) {
+    const transformed=Object.fromEntries(['p1','c1','c2','p2'].map(k=>[k,parabola[k].map(v=>v*factor+offset)]));
+    const b={id:'transformed',type:'bezier',...transformed},expected=cubicAt(b,.27183);
+    const hit=snapPoint(expected,[b],{scale,tolerancePx:1});
+    assert.equal(hit.kind,'nearest');assert.ok(dist(hit.point,expected)*scale<.01);
+  }
+  const malformed={...parabola,c1:[Infinity,0]};
+  assert.equal(nearestPointOnEntity([20,20],malformed),null);
+  assert.equal(snapPoint([20,20],[malformed],{tolerancePx:.01}),null);
+});

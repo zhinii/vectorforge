@@ -501,3 +501,98 @@ test('health timeout restores enabled Connect and reports timeout', async () => 
   const h=setup({deferredHealth:true,quickTimeout:true}); await h.click('connect-btn'); await new Promise(r=>setTimeout(r,10)); await h.tick();
   assert.equal(h.state().connState,'error'); assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.el('connect-btn').disabled,false); assert.equal(h.el('send-btn').disabled,false); assert.match(h.log(),/timed out/); assert.equal(h.requests.length,0);
 });
+
+// Exercise AI-created polygons through the real body-drag event path. The
+// provider is the harness's local mock; these tests make no network requests.
+async function translationScene(ops) {
+  const h=setup(); await h.connect();
+  const done=h.submit('chat-form','Create translation snap fixtures');
+  await h.respond(1,{reply:'Fixtures ready',ops}); await done;
+  await h.click('measurements-toggle');
+  // Deselect first so the grab is deliberately not a resize/rotation grip.
+  await h.tap(100,600);
+  return h;
+}
+const triangleOp={op:'polygon',center:[0,0],radius:10,sides:3,rotation:0};
+const approxPoint=(actual,expected,epsilon=1e-6)=>actual.forEach((v,i)=>assert.ok(Math.abs(v-expected[i])<epsilon,`${actual} ≈ ${expected}`));
+
+test('triangle body snaps its vertex to a line, preserves grab offset and shape, and releases without drift', async()=>{
+  const h=await translationScene([{op:'line',from:[30,-30],to:[30,70]},triangleOp]);
+  const [line,triangle]=h.state().doc.entities, before=JSON.stringify(h.state().doc.entities), count=h.state().undoStack.length;
+  const originalPoints=model.entityPoints(triangle);
+  await h.pointer('pointerdown',504,350); // Grab 1 mm right of center, not the snapping vertex.
+  await h.pointer('pointermove',578,350); // Raw translation is 18.5 mm.
+  approxPoint(triangle.c,[20,0]); approxPoint(model.entityPoints(triangle)[0],[30,0]);
+  assert.equal(h.state().snapTarget.entityId,line.id); assert.equal(h.state().snapTarget.kind,'nearest');
+  approxPoint(h.state().snapTarget.point,[30,0]);
+  assert.deepEqual([triangle.R,triangle.n,triangle.rot],[10,3,0]);
+  model.entityPoints(triangle).forEach((p,i)=>approxPoint(p,originalPoints[i].map((v,j)=>v+(j===0?20:0))));
+  await h.pointer('pointermove',579,350); approxPoint(triangle.c,[20,0]);
+  await h.click('snap-toggle'); await h.pointer('pointermove',578,350);
+  approxPoint(triangle.c,[18.5,0]); assert.equal(h.state().snapTarget,null);
+  await h.click('snap-toggle'); await h.pointer('pointermove',578,350); approxPoint(triangle.c,[20,0]);
+  await h.pointer('pointermove',744,350); approxPoint(triangle.c,[60,0]); assert.equal(h.state().snapTarget,null);
+  await h.pointer('pointerup',744,350); assert.equal(h.state().undoStack.length,count+1);
+  await h.click('undo'); assert.equal(JSON.stringify(h.state().doc.entities),before);
+  await h.click('redo'); approxPoint(h.state().doc.entities[1].c,[60,0]);
+});
+
+test('triangle body vertex snaps to a circle outline without resizing or rotating',async()=>{
+  const h=await translationScene([{op:'circle',center:[40,0],radius:10},triangleOp]);
+  const [circle,triangle]=h.state().doc.entities;
+  await h.pointer('pointerdown',504,350); await h.pointer('pointermove',578,350);
+  approxPoint(triangle.c,[20,0]); approxPoint(model.entityPoints(triangle)[0],[30,0]);
+  assert.equal(h.state().snapTarget.entityId,circle.id); assert.equal(h.state().snapTarget.kind,'nearest');
+  assert.deepEqual([triangle.R,triangle.n,triangle.rot],[10,3,0]);
+  await h.pointer('pointercancel',578,350);
+  await h.pointer('pointermove',650,350); approxPoint(triangle.c,[20,0]);
+});
+
+test('triangle body snaps a vertex to a true cubic outline away from endpoints and midpoint',async()=>{
+  const h=await translationScene([{op:'bezier',from:[30,-40],control1:[50,-20],control2:[50,20],to:[30,40]},triangleOp]);
+  const [curve,triangle]=h.state().doc.entities;
+  const rawVertex=[41.6,-17.68], expected=spatial.nearestPointOnEntity(rawVertex,curve,{scale:4});
+  await h.pointer('pointerdown',504,350); await h.pointer('pointermove',630.4,420.72);
+  approxPoint(model.entityPoints(triangle)[0],expected,1e-5);
+  assert.equal(h.state().snapTarget.entityId,curve.id); assert.equal(h.state().snapTarget.kind,'nearest');
+  assert.deepEqual([triangle.R,triangle.n,triangle.rot],[10,3,0]);
+  await h.pointer('pointerup',630.4,420.72);
+});
+
+test('body snapping excludes the moving shape and stays off when disabled',async()=>{
+  const h=await translationScene([triangleOp]); const triangle=h.state().doc.entities[0];
+  await h.pointer('pointerdown',504,350); await h.pointer('pointermove',509,350);
+  approxPoint(triangle.c,[1.25,0]); assert.equal(h.state().snapTarget,null);
+  await h.pointer('pointerup',509,350);
+  const off=await translationScene([{op:'line',from:[30,-30],to:[30,70]},triangleOp]);
+  await off.click('snap-toggle'); await off.pointer('pointerdown',504,350); await off.pointer('pointermove',578,350);
+  approxPoint(off.state().doc.entities[1].c,[18.5,0]); assert.equal(off.state().snapTarget,null);
+});
+
+test('triangle edge midpoint and center are translation anchors at screen-scaled tolerance',async()=>{
+  const h=await translationScene([{op:'line',from:[-25,0],to:[-25,5]},triangleOp]);
+  const [line,triangle]=h.state().doc.entities;
+  await h.pointer('pointerdown',504,350); await h.pointer('pointermove',430,350);
+  approxPoint(triangle.c,[-20,0]); approxPoint(h.state().snapTarget.point,[-25,0]);
+  assert.equal(h.state().snapTarget.entityId,line.id); assert.equal(h.state().snapTarget.kind,'endpoint');
+  const points=model.entityPoints(triangle);
+  approxPoint(points[1].map((v,i)=>(v+points[2][i])/2),[-25,0]);
+  await h.pointer('pointerup',430,350);
+
+  const center=await translationScene([{op:'line',from:[30,0],to:[30,1]},{...triangleOp,radius:20}]);
+  // Eight pixels per world unit: 1.5 mm is now outside the ten-pixel tolerance.
+  center.state().view.s=8;
+  await center.pointer('pointerdown',504,350); await center.pointer('pointermove',732,350);
+  approxPoint(center.state().doc.entities[1].c,[28.5,0]); assert.equal(center.state().snapTarget,null);
+  await center.pointer('pointermove',738,350);
+  approxPoint(center.state().doc.entities[1].c,[30,0]); approxPoint(center.state().snapTarget.point,[30,0]);
+});
+
+test('moving cubic control handles are never mistaken for body outline anchors',async()=>{
+  const h=await translationScene([{op:'line',from:[-5,55],to:[5,55]},
+    {op:'bezier',from:[-20,0],control1:[0,40],control2:[20,40],to:[40,0]}]);
+  const curve=h.state().doc.entities[1], before=JSON.parse(JSON.stringify(curve));
+  await h.pointer('pointerdown',540,230); await h.pointer('pointermove',540,174);
+  assert.equal(h.state().snapTarget,null);
+  for(const key of ['p1','c1','c2','p2']) approxPoint(curve[key],[before[key][0],before[key][1]+14]);
+});
