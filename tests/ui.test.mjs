@@ -339,3 +339,12 @@ test('console shows about eight lines with a short-viewport cap and scrollback',
   assert.match(css, /#chat-log \{[^}]*height: calc\(1\.5em \* 8 \+ 8px\); max-height: 28dvh; overflow-y: auto;/s);
   assert.doesNotMatch(css, /#chat-log \{ height: calc\(1\.5em \* 3\)/);
 });
+
+
+test('Timeline floats above scene on short zoomed or keyboard viewport to keep list usable', async () => {
+  const h = setup(), vv = h.window.visualViewport, css = h.document.documentElement.style.values;
+  Object.assign(vv, { width: 393, height: 252, offsetLeft: 0, offsetTop: 0 });
+  await h.click('timeline-toggle');
+  assert.equal(css['--drawer-top'], '12px');
+  assert.equal(css['--drawer-height'], '228px');
+});
