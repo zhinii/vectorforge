@@ -409,13 +409,9 @@ document.getElementById('settings-save').addEventListener('click', ev => {
   addMsg('ai', 'Connection saved. Ask me to draw something — e.g. "draw me a star, radius 60".');
 });
 
-// ---- mobile panel toggle ----
-const side = document.getElementById('side');
-document.getElementById('chat-toggle').addEventListener('click', () => side.classList.toggle('open'));
-// Opening the panel by sending focus to chat on coarse pointers:
-if (window.matchMedia('(pointer: coarse)').matches) {
-  document.getElementById('chat-form').addEventListener('submit', () => side.classList.add('open'));
-}
+// ---- timeline drawer toggle ----
+const timelinePanel = document.getElementById('timeline-panel');
+document.getElementById('timeline-toggle').addEventListener('click', () => timelinePanel.classList.toggle('open'));
 
 // ---- chat ----
 const history = [];
@@ -423,7 +419,10 @@ const chatLog = document.getElementById('chat-log');
 function addMsg(cls, text, who) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
-  div.innerHTML = `<span class="who">${who || (cls === 'user' ? 'you' : cls === 'err' ? 'error' : 'ai')}</span>`;
+  const label = document.createElement('span');
+  label.className = 'who';
+  label.textContent = who || (cls === 'user' ? 'you >' : cls === 'err' ? 'error >' : 'ai >');
+  div.appendChild(label);
   div.appendChild(document.createTextNode(text));
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -436,7 +435,7 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   const q = input.value.trim();
   if (!q) return;
   input.value = '';
-  // Connect by pasting the key into the chat: "sk-..." or "key sk-...".
+  // Connect by pasting the key into the console: "sk-..." or "key sk-...".
   const keyMatch = /^(?:key|api[- ]?key)?\s*[:=]?\s*(sk-[\w.\-]{6,})$/i.exec(q);
   if (keyMatch) {
     const c = { ...loadConn(), key: keyMatch[1] };
@@ -450,10 +449,10 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   addMsg('user', q);
   const conn = loadConn();
   if (!conn.key) {
-    addMsg('err', 'Not connected yet. Paste your Qwen API key here in the chat (it starts with "sk-") and I\'ll save it in this browser only.');
+    addMsg('err', 'Not connected yet. Paste your Qwen API key here in the console (it starts with "sk-") and I\'ll save it in this browser only.');
     return;
   }
-  const thinking = addMsg('ai', '…', 'ai');
+  const thinking = addMsg('ai', '…', 'ai >');
   try {
     const scene = serializeScene(doc);
     const res = await askAgent(conn, { question: q, history, scene });
@@ -469,10 +468,10 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
     }
   } catch (e) {
     thinking.remove();
-    const why = { auth: 'Authentication failed — check the API key in Settings.',
+    const why = { auth: 'Authentication failed — check the API key under API.',
       quota: 'Quota exhausted on this key.',
       endpoint: 'Endpoint rejected — only Alibaba https endpoints are allowed.',
-      model: 'Model/endpoint mismatch — check Settings.',
+      model: 'Model/endpoint mismatch — check API settings.',
       invalid: 'The model returned ops outside the schema; nothing was drawn.',
       truncated: 'The response was cut off; try a smaller request.' }[e.message];
     addMsg('err', why || ('Request failed: ' + e.message));
@@ -485,4 +484,4 @@ view.oy = canvas.clientHeight / 2 || 400;
 window.addEventListener('resize', resize);
 resize();
 refreshTimeline();
-addMsg('ai', 'Welcome to VectorForge. Draw with the toolbar, or describe a design and I will draft it — every shape stays dimensioned, and you can drag grips or double-tap dimensions to correct me. To connect the AI, paste your Qwen API key right here in the chat (it starts with "sk-"); it is stored in this browser only.');
+addMsg('ai', 'VectorForge ready. Paste your Qwen API key (sk-…) here to connect, then describe a design — or draw with the chips below. Drag grips to reshape; double-tap a dimension to type its value.');
