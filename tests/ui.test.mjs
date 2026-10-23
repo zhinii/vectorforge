@@ -110,14 +110,14 @@ test('startup HTML IDs, offline canvas, accessible dialog controls, and no persi
 test('settings X, Cancel, backdrop, native Escape contract, focus return, key clearing', async () => {
   const h = setup(), dlg = h.el('settings-dialog');
   for (const exit of ['settings-close', 'settings-cancel', 'backdrop', 'escape']) {
-    await h.click('settings-btn'); assert.equal(dlg.open, true); assert.equal(h.document.activeElement.id, 'settings-close');
+    await h.click('conn-light'); assert.equal(dlg.open, true); assert.equal(h.document.activeElement.id, 'settings-close');
     h.el('set-key').value = 'sk-private12345';
     if (exit === 'backdrop') { await dlg.dispatch('pointerdown', { clientX: 10, clientY: 10 }); await dlg.dispatch('click', { clientX: 10, clientY: 10 }); }
     else if (exit === 'escape') dlg.nativeEscape(); else await h.click(exit);
-    assert.equal(dlg.open, false); assert.equal(h.el('set-key').value, ''); assert.equal(h.document.activeElement.id, 'settings-btn');
+    assert.equal(dlg.open, false); assert.equal(h.el('set-key').value, ''); assert.equal(h.document.activeElement.id, 'conn-light');
   }
   assert.equal(dlg.modalCalls, 4); assert.equal(h.requests.length, 0);
-  await h.click('settings-btn'); await dlg.dispatch('pointerdown', { clientX: 120, clientY: 120 }); await dlg.dispatch('click', { clientX: 120, clientY: 120 }); assert.equal(dlg.open, true);
+  await h.click('conn-light'); await dlg.dispatch('pointerdown', { clientX: 120, clientY: 120 }); await dlg.dispatch('click', { clientX: 120, clientY: 120 }); assert.equal(dlg.open, true);
   h.el('set-mode').value='byok'; await h.el('settings-form').dispatch('submit'); assert.equal(dlg.open, true); assert.equal(h.el('settings-error').hidden, false); assert.match(h.el('settings-error').textContent, /key/);
 });
 
@@ -127,7 +127,7 @@ test('timeline is initially inert and closes by X, toggle, outside, Escape or op
     await h.click('timeline-toggle'); assert.equal(panel.inert, false); assert.equal(h.el('timeline-toggle').getAttribute('aria-expanded'), 'true'); assert.equal(h.document.activeElement.id, 'timeline-close');
     if (exit === 'outside') await h.el('canvas').dispatch('pointerdown', { clientX: 1, clientY: 1, pointerId: 3, pointerType: 'mouse' });
     else if (exit === 'escape') await h.window.dispatch('keydown', { key: 'Escape', target: panel });
-    else if (exit === 'dialog') await h.click('settings-btn'); else await h.click(exit);
+    else if (exit === 'dialog') await h.click('conn-light'); else await h.click(exit);
     assert.equal(panel.inert, true); assert.equal(panel.getAttribute('aria-hidden'), 'true'); assert.equal(h.el('timeline-toggle').getAttribute('aria-expanded'), 'false');
   }
 });
@@ -163,7 +163,7 @@ test('two-touch pinch zooms without geometry or undo entries; canceled pointers 
 });
 
 test('connect through API form and design success are transient, transactional and undoable', async () => {
-  const h = setup(); await h.click('settings-btn'); h.el('set-mode').value='byok'; h.el('set-key').value = 'sk-testdummy12345'; await h.el('settings-form').dispatch('submit');
+  const h = setup(); await h.click('conn-light'); h.el('set-mode').value='byok'; h.el('set-key').value = 'sk-testdummy12345'; await h.el('settings-form').dispatch('submit');
   assert.equal(h.state().connState, 'checking'); assert.equal(h.el('settings-dialog').open, false); assert.equal(h.el('set-key').value, '');
   assert.equal(h.requests[0].options.headers.Authorization, 'Bearer sk-testdummy12345'); assert.equal(h.requests[0].options.credentials, 'omit');
   await h.respond(0); assert.equal(h.state().connState, 'on');
@@ -172,7 +172,7 @@ test('connect through API form and design success are transient, transactional a
   assert.equal(h.state().doc.entities[0].r, 10); assert.equal(h.state().history.length, 2); assert.equal(h.el('send-btn').disabled, false); assert.equal(h.el('cancel-request').hidden, true);
   await h.click('undo'); assert.equal(h.state().doc.entities.length, 0); await h.click('redo'); assert.equal(h.state().doc.entities.length, 1);
   assert.ok(h.storageCalls.every(([action]) => action === 'remove')); assert.doesNotMatch(h.log(), /sk-testdummy12345/);
-  await h.click('settings-btn'); await h.click('settings-disconnect'); assert.equal(h.state().connection.key, ''); assert.equal(h.state().connState, 'off');
+  await h.click('conn-light'); await h.click('settings-disconnect'); assert.equal(h.state().connection.key, ''); assert.equal(h.state().connState, 'off');
 });
 
 test('connect and design auth failures surface actionable errors and always clear busy state', async () => {
@@ -214,7 +214,7 @@ test('embedded secrets are neither echoed nor sent; provider reply keys are reda
 });
 
 test('open modal blocks canvas creation and global drawing/delete/undo shortcuts', async () => {
-  const h = setup(); await h.tool('circle'); await h.tap(500, 350); await h.tap(540, 350); await h.click('settings-btn');
+  const h = setup(); await h.tool('circle'); await h.tap(500, 350); await h.tap(540, 350); await h.click('conn-light');
   const before = JSON.stringify(h.state().doc.entities);
   await h.tap(800, 600); await h.tap(850, 600);
   for (const key of ['Delete', 'l', 'z']) await h.window.dispatch('keydown', { key, ctrlKey: key === 'z', target: h.el('canvas') });
@@ -301,9 +301,9 @@ test('pinch keeps the prior world midpoint anchored under the moving fingers', a
 test('floating panels preserve scene transform and restore focus without scrolling', async () => {
   const h = setup(); await h.tool('circle'); await h.tap(500,350); await h.tap(540,350); await h.tool('select');
   const before = JSON.stringify(h.state().view);
-  await h.click('settings-btn'); assert.equal(JSON.stringify(h.state().view), before);
+  await h.click('conn-light'); assert.equal(JSON.stringify(h.state().view), before);
   await h.click('settings-close'); assert.equal(JSON.stringify(h.state().view), before);
-  assert.equal(h.el('settings-btn').focusOptions.preventScroll, true);
+  assert.equal(h.el('conn-light').focusOptions.preventScroll, true);
   const b = h.state().dimBoxes[0]; await h.tap(b.x+2,b.y+2);
   assert.equal(h.el('dim-edit').focusOptions.preventScroll, true);
   await h.click('dimension-cancel'); assert.equal(JSON.stringify(h.state().view), before);
@@ -326,7 +326,7 @@ test('floating API and Timeline remain in the zoomed visual viewport without mov
   const h = setup(), vv = h.window.visualViewport, css = h.document.documentElement.style.values;
   const before = JSON.stringify(h.state().view);
   Object.assign(vv, { width: 300, height: 500, offsetLeft: 120, offsetTop: 80 });
-  await h.click('settings-btn');
+  await h.click('conn-light');
   assert.equal(css['--overlay-left'], '270px'); assert.equal(css['--overlay-top'], '330px');
   assert.equal(css['--overlay-width'], '276px'); assert.equal(css['--overlay-height'], '476px');
   vv.height = 250; vv.offsetTop = 180; await vv.dispatch('resize');
@@ -415,14 +415,14 @@ test('four-point cubic Bezier creates, reshapes, copies and exports through supp
 test('language switch translates static, live dimension, errors and AI task without altering geometry', async () => {
   const h=setup(); await h.tool('circle'); await h.tap(500,350); await h.tap(540,350);
   const before=JSON.stringify(h.state().doc.entities);
-  h.el('language-select').value='zh'; await h.el('language-select').dispatch('change');
+  assert.equal(h.el('language-toggle').textContent,'中文'); await h.click('language-toggle'); assert.equal(h.el('language-toggle').textContent,'English');
   assert.equal(h.el('copy-selected').textContent,'复制'); assert.match(h.el('coords').textContent,/毫米/);
   assert.equal(JSON.stringify(h.state().doc.entities),before); assert.match(h.log(),/已就绪/);
   await h.submit('chat-form','sk-testdummy12345'); await h.respond(0);
   const pending=h.submit('chat-form','画一个圆'); assert.equal(JSON.parse(h.requests[1].options.body).language,'zh');
   await h.respond(1,{reply:'已创建。',ops:[]}); await pending;
   assert.match(h.log(),/已创建。/);
-  h.el('language-select').value='en'; await h.el('language-select').dispatch('change'); assert.equal(h.el('copy-selected').textContent,'Copy');
+  await h.click('language-toggle'); assert.equal(h.el('language-toggle').textContent,'中文'); assert.equal(h.el('copy-selected').textContent,'Copy');
 });
 
 test('saved-server mode starts ready without a provider call, then connects without browser key', async () => {
@@ -444,4 +444,26 @@ test('manual text tool validates, adds Unicode text, copies and undoes without o
   assert.deepEqual(Array.from(h.state().doc.entities[1].c),[6,-6]); await h.click('undo');assert.equal(h.state().doc.entities.length,1);
   await h.tap(700,350);h.el('text-content').value='bad\ntext'; await h.el('text-form').dispatch('submit');
   assert.equal(h.el('text-error').hidden,false);assert.equal(h.state().doc.entities.length,1);await h.click('text-cancel');
+});
+
+test('default nearby labels form non-overlapping stack and retain a manually dragged offset', async () => {
+  const h=setup(); await h.tool('line'); await h.tap(400,490); await h.tap(700,490);
+  await h.tool('circle'); await h.tap(524,374); await h.tap(564,374);
+  await h.tool('circle'); await h.tap(500,350); await h.tap(540,350); await h.tool('select');
+  const boxes=h.state().dimBoxes.filter(b=>b.measurement); assert.equal(boxes.length,2);
+  assert.ok(boxes[0].y+boxes[0].h <= boxes[1].y || boxes[1].y+boxes[1].h <= boxes[0].y);
+  const b=boxes[0]; await h.pointer('pointerdown',b.x+8,b.y+8); await h.pointer('pointermove',b.x+88,b.y+8); await h.pointer('pointerup',b.x+88,b.y+8);
+  const offset=JSON.stringify(h.state().labelOffsets[b.labelKey]);
+  await h.click('measurements-toggle'); await h.click('measurements-toggle');
+  assert.equal(JSON.stringify(h.state().labelOffsets[b.labelKey]),offset);
+});
+
+test('console Connect hides at server readiness, returns after error, and never spends on health check', async () => {
+  const h=setup(); assert.doesNotMatch(h.html,/id="settings-btn"/); assert.equal(h.el('connect-btn').parent.id,'chat-form');
+  await h.tick(); assert.equal(h.el('connect-btn').hidden,true); assert.equal(h.requests.length,0);
+  await h.click('conn-light'); await h.click('settings-disconnect'); assert.equal(h.el('connect-btn').hidden,false);
+  await h.click('connect-btn'); await h.tick(); assert.equal(h.el('connect-btn').hidden,true); assert.equal(h.requests.length,0); assert.equal(h.state().connState,'ready');
+  const done=h.submit('chat-form','circle'); await h.respond(0,{},401); await done;
+  assert.equal(h.el('connect-btn').hidden,false); assert.equal(h.state().connState,'error');
+  await h.click('connect-btn'); await h.tick(); assert.equal(h.requests.length,1); assert.equal(h.el('connect-btn').hidden,true);
 });

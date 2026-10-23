@@ -96,7 +96,7 @@ export const catalogs = Object.freeze({
   "Not connected. Paste your API key.": "Not connected. Paste your API key.",
   "Checking connection…": "Checking connection…",
   "Connected": "Connected",
-  "Connection failed. Open API to retry.": "Connection failed. Open API to retry.",
+  "Connection failed. Use Connect to retry.": "Connection failed. Use Connect to retry.",
   "you >": "you >",
   "error >": "error >",
   "ai >": "ai >",
@@ -178,12 +178,12 @@ export const catalogs = Object.freeze({
   "VectorForge ready. The prototype uses a saved server key; no sign-in or key paste is needed. You can also draw offline or choose your own key in API settings.": "VectorForge ready. The prototype uses a saved server key; no sign-in or key paste is needed. You can also draw offline or choose your own key in API settings.",
   "Bézier": "Bézier",
   "y": "y",
-  "Not connected. Open API settings.": "Not connected. Open API settings.",
+  "Not connected. Use Connect in the console.": "Not connected. Use Connect in the console.",
   "Server connection ready. Provider will be checked on your first request.": "Server connection ready. Provider will be checked on your first request.",
   "The prototype server key is not configured. Use your own key in API settings or contact the app owner.": "The prototype server key is not configured. Use your own key in API settings or contact the app owner.",
   "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.": "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.",
-  "Open API settings to connect. Manual drawing and export work offline.": "Open API settings to connect. Manual drawing and export work offline.",
-  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Your own key is optional in API. Manual drawing and export work offline.": "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Your own key is optional in API. Manual drawing and export work offline.",
+  "Use Connect in the console. Manual drawing and export work offline.": "Use Connect in the console. Manual drawing and export work offline.",
+  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.",
   "user": "user",
   "Text": "Text",
   "text": "text",
@@ -295,7 +295,7 @@ export const catalogs = Object.freeze({
   "Not connected. Paste your API key.": "未连接。请粘贴 API 密钥。",
   "Checking connection…": "正在检查连接…",
   "Connected": "已连接",
-  "Connection failed. Open API to retry.": "连接失败。请打开 API 设置重试。",
+  "Connection failed. Use Connect to retry.": "连接失败。请点击连接重试。",
   "you >": "你 >",
   "error >": "错误 >",
   "ai >": "AI >",
@@ -377,12 +377,12 @@ export const catalogs = Object.freeze({
   "VectorForge ready. The prototype uses a saved server key; no sign-in or key paste is needed. You can also draw offline or choose your own key in API settings.": "VectorForge 已就绪。原型使用服务器已保存密钥，无需登录或粘贴密钥。也可离线绘图，或在 API 设置中选择自己的密钥。",
   "Bézier": "贝塞尔曲线",
   "y": "Y",
-  "Not connected. Open API settings.": "未连接。请打开 API 设置。",
+  "Not connected. Use Connect in the console.": "未连接。请使用控制台中的连接按钮。",
   "Server connection ready. Provider will be checked on your first request.": "服务器连接已就绪。首次请求将验证服务商连接。",
   "The prototype server key is not configured. Use your own key in API settings or contact the app owner.": "原型服务器尚未配置密钥。请在 API 设置中使用自己的密钥，或联系应用所有者。",
   "The connection mode and credentials conflict. Choose server mode without a key, or your own API key.": "连接模式与密钥冲突。请选择无需输入密钥的服务器模式，或使用自己的 API 密钥。",
-  "Open API settings to connect. Manual drawing and export work offline.": "请打开 API 设置连接。手动绘图和导出支持离线使用。",
-  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Your own key is optional in API. Manual drawing and export work offline.": "VectorForge 已就绪。原型使用服务器已保存的密钥，无需粘贴或登录。也可在 API 设置中使用自己的密钥。手动绘图和导出支持离线使用。",
+  "Use Connect in the console. Manual drawing and export work offline.": "请打开 API 设置连接。手动绘图和导出支持离线使用。",
+  "VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.": "VectorForge 已就绪。原型使用服务器已保存的密钥，无需粘贴或登录。可通过连接状态灯打开高级连接设置。手动绘图和导出支持离线使用。",
   "user": "手动",
   "Text": "文字",
   "text": "文字",
@@ -447,6 +447,11 @@ export function applyTranslations(root = globalThis.document) {
       element.setAttribute(attribute, t(element.getAttribute(`data-i18n-${attribute}`)));
     }
   }
-  const selector = root.getElementById?.('language-select');
-  if (selector) selector.value = language;
+  const toggle = root.getElementById?.('language-toggle');
+  if (toggle) {
+    toggle.textContent = language === 'en' ? '中文' : 'English';
+    toggle.setAttribute('lang', language === 'en' ? 'zh-CN' : 'en');
+    toggle.setAttribute('aria-label', language === 'en' ? 'Switch to Chinese' : '切换为英文');
+    toggle.setAttribute('title', language === 'en' ? 'Switch to Chinese' : '切换为英文');
+  }
 }

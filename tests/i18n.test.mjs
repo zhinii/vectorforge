@@ -34,11 +34,11 @@ test('every marked static label, help text, tooltip and accessible name has tran
   const keys = [...html.matchAll(/data-i18n(?:-(?:title|aria-label|placeholder))?="([^"]*)"/g)].map(m => decode(m[1]));
   assert.ok(keys.length >= 60, 'Static UI is covered, not just the toolbar');
   for (const key of keys) assert.ok(Object.hasOwn(catalogs.zh, key), `Missing Chinese translation: ${key}`);
-  for (const id of ['language-select', 'copy-selected', 'paste-selected', 'snap-toggle', 'measurements-toggle']) assert.match(html, new RegExp(`id="${id}"`));
+  for (const id of ['language-toggle', 'copy-selected', 'paste-selected', 'snap-toggle', 'measurements-toggle']) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /data-tool="bezier"/);
   assert.match(html, /id="snap-toggle"[^>]*aria-pressed="true"/);
-  assert.match(html, /option value="en" lang="en">English/);
-  assert.match(html, /option value="zh" lang="zh-CN">中文/);
+  assert.match(html, /button type="button" id="language-toggle"/);
+  assert.doesNotMatch(html, /select id="language-/);
 });
 
 test('static translation changes only text and requested attributes and switches back cleanly', () => {
@@ -46,13 +46,14 @@ test('static translation changes only text and requested attributes and switches
     const attrs = Object.fromEntries([...m[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(a => [a[1], decode(a[2])]));
     return { attrs, textContent: 'initial', getAttribute: key => attrs[key], setAttribute: (key, value) => { attrs[key] = value; } };
   });
-  const select = { value: 'en' };
-  const root = { documentElement: {}, getElementById: id => id === 'language-select' ? select : null,
+  const select = { attrs: {}, setAttribute(key,value) { this.attrs[key]=value; } };
+  const root = { documentElement: {}, getElementById: id => id === 'language-toggle' ? select : null,
     querySelectorAll: selector => items.filter(item => Object.hasOwn(item.attrs, selector.slice(1, -1))) };
   for (const language of ['zh', 'en', 'zh', 'en']) {
     setLanguage(language); applyTranslations(root);
     assert.equal(root.documentElement.lang, language === 'zh' ? 'zh-CN' : 'en');
-    assert.equal(select.value, language);
+    assert.equal(select.textContent, language === 'en' ? '中文' : 'English');
+    assert.equal(select.attrs['aria-label'], language === 'en' ? 'Switch to Chinese' : '切换为英文');
     for (const item of items) {
       if (item.attrs['data-i18n']) assert.equal(item.textContent, catalogs[language][item.attrs['data-i18n']]);
       for (const attribute of ['title', 'aria-label', 'placeholder']) if (item.attrs[`data-i18n-${attribute}`]) {

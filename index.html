@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title data-i18n="VectorForge — AI 2D CAD">VectorForge — AI 2D CAD</title>
-<link rel="stylesheet" href="style.css?v=20261023-5">
+<link rel="stylesheet" href="style.css?v=20261023-6">
 </head>
 <body>
 
@@ -12,7 +12,8 @@
 <header id="console">
   <div id="chat-log" aria-live="polite"></div>
   <form id="chat-form">
-    <span id="conn-light" class="off" title="Checking saved server connection…" data-i18n-title="Checking saved server connection…"></span>
+    <button type="button" id="conn-light" class="off" title="Checking saved server connection…" data-i18n-title="Checking saved server connection…"></button>
+    <button type="button" id="connect-btn" data-i18n="Connect">Connect</button>
     <span class="prompt">&gt;</span>
     <input id="chat-input" aria-label="Design command or API key" spellcheck="false" autocapitalize="off" type="text" placeholder='command or design request… (no key needed for the prototype)' autocomplete="off" data-i18n-aria-label="Design command or API key" data-i18n-placeholder="command or design request… (no key needed for the prototype)">
     <button type="submit" id="send-btn" title="Send" aria-label="Send" data-i18n-title="Send" data-i18n-aria-label="Send">⏎</button>
@@ -39,12 +40,11 @@
     <button id="copy-selected" title="Copy selected object (Ctrl+C)" disabled data-i18n="Copy" data-i18n-title="Copy selected object (Ctrl+C)">Copy</button>
     <button id="paste-selected" title="Paste copied object (Ctrl+V)" disabled data-i18n="Paste" data-i18n-title="Paste copied object (Ctrl+V)">Paste</button>
     <button id="snap-toggle" class="active" title="Snap to geometry, perpendicular feet and tangents" aria-pressed="true" data-i18n="Snap" data-i18n-title="Snap to geometry, perpendicular feet and tangents">Snap</button>
-    <button id="measurements-toggle" class="active" title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry." aria-pressed="true" data-i18n="Measurements" data-i18n-title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry.">Measurements</button>
+    <button id="measurements-toggle" class="active" title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry." aria-pressed="true" data-i18n="Dims" data-i18n-title="Show object measurements. Drag green labels to reposition; measurements do not constrain geometry.">Dims</button>
     <button id="timeline-toggle" aria-controls="timeline-panel" aria-expanded="false" data-i18n="Timeline">Timeline</button>
     <button id="export-svg" data-i18n="SVG">SVG</button>
     <button id="export-dxf" data-i18n="DXF">DXF</button>
-    <button id="settings-btn" data-i18n="API">API</button>
-    <select id="language-select" aria-label="Language" title="Language" data-i18n-title="Language" data-i18n-aria-label="Language"><option value="en" lang="en">English</option><option value="zh" lang="zh-CN">中文</option></select>
+    <button type="button" id="language-toggle" lang="zh-CN" aria-label="Switch to Chinese">中文</button>
   </div>
 </nav>
 
@@ -100,7 +100,7 @@
   </form>
 </dialog>
 
-<script type="module" src="js/main.mjs?v=20261023-5"></script>
+<script type="module" src="js/main.mjs?v=20261023-6"></script>
 </body>
 </html>
 

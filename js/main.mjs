@@ -1,10 +1,10 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-5';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-5';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-5';
-import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-5';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-5';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-6';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-6';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-6';
+import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-6';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-6';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -229,12 +229,16 @@ function drawDimensions(e) {
 // Measurements are read-only geometry observations, not permanent constraints.
 // Their offsets are screen-space annotations so dragging a label cannot reshape.
 function drawNearbyDimensions(e) {
-  const nearby = nearbyMeasurements(e, doc.entities, { limit: 3, maxDistance: 180 / view.s });
+  const nearby = nearbyMeasurements(e, doc.entities, { limit: Math.max(1, Math.min(3, Math.floor((canvas.clientHeight - 42) / 44))), maxDistance: 180 / view.s });
   ctx.save(); ctx.font = '12px system-ui';
   nearby.forEach((m, i) => {
-    const key = m.id, offset = labelOffsets[key] || [16, -42 - i * 42];
+    const key = m.id;
     const a = w2s(m.from), b = w2s(m.to);
     const anchor = [(a[0]+b[0])/2, (a[1]+b[1])/2];
+    // Common stack origin prevents unrelated gap midpoints from colliding.
+    const center = w2s(centerOf(e));
+    const stackY = Math.max(22, Math.min(canvas.clientHeight - nearby.length * 44 - 20, center[1] - 42));
+    const offset = labelOffsets[key] || [center[0] + 24 - anchor[0], stackY + i * 44 - anchor[1]];
     const rounded = v => Math.round(v * 100) / 100;
     const lines = m.centerDistance !== null
       ? [`${m.targetId} · ${t('Center distance')} ${rounded(m.centerDistance)} ${t('mm')}`, `${t('Edge clearance')} ${rounded(m.clearance)} ${t('mm')}`]
@@ -645,8 +649,10 @@ const chatLog = document.getElementById('chat-log');
 const messageEntries = [];
 function setConn(state, detail) {
   connState = state; connLight.className = state;
+  document.getElementById('connect-btn').hidden = state === 'on' || state === 'ready';
+  document.getElementById('connect-btn').disabled = state === 'checking';
   connDetail = detail;
-  connLight.title = t(detail || { off: 'Not connected. Open API settings.', ready:'Server connection ready. Provider will be checked on your first request.', checking: 'Checking connection…', on: 'Connected', error: 'Connection failed. Open API to retry.' }[state]);
+  connLight.title = t(detail || { off: 'Not connected. Use Connect in the console.', ready:'Server connection ready. Provider will be checked on your first request.', checking: 'Checking connection…', on: 'Connected', error: 'Connection failed. Use Connect to retry.' }[state]);
   connLight.setAttribute('aria-label', connLight.title);
 }
 function addMsg(cls, text, who, translate = true) {
@@ -717,6 +723,7 @@ async function testConnection(config) {
   } finally { if (activeRequest === request) { activeRequest = null; setBusy(false); } }
 }
 async function checkServerConnection() {
+  cancelRequest(null);
   const request = {kind:'health',controller:new AbortController()};
   activeRequest=request; setBusy(true); setConn('checking');
   const timer=setTimeout(()=>request.controller.abort(),10000);
@@ -731,13 +738,17 @@ async function checkServerConnection() {
     setConn('error'); addMsg('err',errorText(error));
   } finally { clearTimeout(timer); if(activeRequest===request) {activeRequest=null;setBusy(false);} }
 }
+document.getElementById('connect-btn').addEventListener('click', () => {
+  if (connection.mode === 'byok') { openConnectionSettings(); return; }
+  checkServerConnection();
+});
 function syncConnectionMode() {
   const server = document.getElementById('set-mode').value === 'server';
   for (const id of ['set-base','set-model','set-key','set-relay']) document.getElementById(id).disabled=server;
   if (server) document.getElementById('set-key').value='';
 }
 document.getElementById('set-mode').addEventListener('change',syncConnectionMode);
-document.getElementById('settings-btn').addEventListener('click', () => {
+function openConnectionSettings() {
   rememberSettingsFocus();
   document.getElementById('set-mode').value=connection.mode;
   for (const name of ['base', 'model']) document.getElementById('set-' + name).value = connection[name];
@@ -747,7 +758,8 @@ document.getElementById('settings-btn').addEventListener('click', () => {
   document.getElementById('settings-error').hidden = true;
   syncConnectionMode();
   openDialog(dlg, document.getElementById('settings-close'));
-});
+}
+connLight.addEventListener('click', openConnectionSettings);
 dlg.addEventListener('close', () => { document.getElementById('set-key').value = ''; });
 document.getElementById('settings-form').addEventListener('submit', ev => {
   ev.preventDefault();
@@ -762,7 +774,8 @@ document.getElementById('settings-form').addEventListener('submit', ev => {
   }); } catch (error) {
     const feedback = document.getElementById('settings-error'); feedback.textContent = t(errorText(error)); feedback.hidden = false; return;
   }
-  dlg.close(); addMsg('ai', 'Checking the connection…'); testConnection(config);
+  dlg.close(); addMsg('ai', 'Checking the connection…');
+  if (config.mode === 'server') { connection = config; history.length = 0; checkServerConnection(); } else testConnection(config);
 });
 document.getElementById('settings-disconnect').addEventListener('click', () => {
   cancelRequest(null); connection.key = ''; history.length = 0; setConn('off'); dlg.close();
@@ -783,7 +796,7 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   // Never echo or send a secret pasted as part of a larger command.
   if (/sk-/i.test(q)) { input.value = ''; addMsg('err', 'Paste the API key by itself or use API settings. The text was not sent or displayed.'); return; }
   if (activeRequest) { addMsg('err', 'A request is running. Wait, or use Stop first.'); return; }
-  if (connState !== 'on' && connState !== 'ready') { addMsg('err', 'Open API settings to connect. Manual drawing and export work offline.'); return; }
+  if (connState !== 'on' && connState !== 'ready') { addMsg('err', 'Use Connect in the console. Manual drawing and export work offline.'); return; }
   if (q.length > 1600) { addMsg('err', 'Keep the design request under 1,600 characters.'); return; }
   input.value = ''; addMsg('user', q);
   const request = { kind: 'design', controller: new AbortController(), thinking: addMsg('ai', 'Working…') };
@@ -811,14 +824,14 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   } catch (error) {
     if (request.controller.signal.aborted) return;
     request.thinking.remove();
-    if (error.message === 'auth') setConn('error');
+    if (!['invalid','response'].includes(error.message)) setConn('error');
     addMsg('err', errorText(error));
   } finally { if (!activeRequest || activeRequest === request) { activeRequest = null; setBusy(false); } }
 });
 
 // ---- boot ----
-document.getElementById('language-select').addEventListener('change', ev => {
-  setLanguage(ev.target.value); applyTranslations(document); setHint(currentHint);
+document.getElementById('language-toggle').addEventListener('click', () => {
+  setLanguage(getLanguage() === 'en' ? 'zh' : 'en'); applyTranslations(document); setHint(currentHint);
   refreshTimeline(); setConn(connState, connDetail);
   for (const entry of messageEntries) {
     entry.label.textContent = t(entry.labelText);
@@ -834,5 +847,5 @@ window.addEventListener('blur', () => { drag = null; toolTap = null; pointers.cl
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(canvas);
 resize(); refreshTimeline(); setTool('select');
-addMsg('ai', 'VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Your own key is optional in API. Manual drawing and export work offline.');
+addMsg('ai', 'VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.');
 checkServerConnection();
