@@ -40,7 +40,7 @@ turn. The design principles, in order of importance:
    ever sent to the configured CAD relay and whitelisted Alibaba domains, and the light stays red until a
    real round-trip succeeds.
 6. **CAD conventions over chat conventions.** The UI follows Rhino's model: a
-   3–5 line monospace command console on top, small tool chips under it, the
+   roughly 8-line monospace command console on top, small tool chips under it, the
    canvas gets everything else. The console is a command line that also
    accepts natural language — not a chat app with a canvas attached.
 
@@ -50,7 +50,7 @@ turn. The design principles, in order of importance:
 - Grip dragging (endpoints, radius points, vertices, arc angles) with live
   dimension readout; click/tap a dimension to type a driving value
 - Pan (middle/right/two-finger drag), zoom (wheel/pinch), adaptive mm grid
-- Undo/redo (document snapshots), delete, keyboard shortcuts (V L C R S A)
+- Undo/redo (document snapshots), visible Delete-selected button, keyboard shortcuts (V L C R S A)
 - Timeline: every op (human or AI) is a listed entry; the seed of a future
   parametric feature tree
 - AI console: paste an `sk-…` key to connect; connection is **verified with a
@@ -58,7 +58,7 @@ turn. The design principles, in order of importance:
   (grey → amber → green/red); keys stay in memory for this tab only and
   are cleared on reload or Disconnect
 - Export: DXF R2000 (LINE/CIRCLE/ARC/LWPOLYLINE, y-up mm) and SVG
-- Mobile: full touch support, keypad-sized chips, 3-line console
+- Mobile: full touch support, keypad-sized chips, 8-line scrollable console
 
 ## Architecture
 
@@ -155,3 +155,8 @@ The app removes the old persisted `vectorforge.connection` entry on startup.
 Static assets and module imports carry a shared release query version. Bump it
 in `index.html`, `js/main.mjs`, and `js/dxf.mjs` when shipping changed modules
 to prevent returning browsers from combining cached code with new HTML.
+
+Mobile canvas pinch/pan is handled inside the canvas, not as page zoom. The
+closed Timeline is removed from layout and workspace overflow is clipped so
+it cannot enlarge the mobile page. Browser accessibility zoom outside the
+canvas remains available.
