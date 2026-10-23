@@ -2,13 +2,24 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VectorForge — AI 2D CAD</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="topbar">
-  <div class="brand">VectorForge <span class="tag">AI 2D CAD · prototype</span></div>
+
+<!-- Rhino-style command console: 3-5 line output + prompt, always on top -->
+<header id="console">
+  <div id="chat-log" aria-live="polite"></div>
+  <form id="chat-form">
+    <span class="prompt">&gt;</span>
+    <input id="chat-input" type="text" placeholder='command or design request… (paste sk-… key to connect)' autocomplete="off">
+    <button type="submit" id="send-btn" title="Send">⏎</button>
+  </form>
+</header>
+
+<!-- tool selections: small key-sized chips -->
+<nav id="topbar">
   <div class="tools" id="draw-tools">
     <button data-tool="select" class="tool active" title="Select / move (V)">Select</button>
     <button data-tool="line" class="tool" title="Line (L)">Line</button>
@@ -20,12 +31,12 @@
   <div class="actions">
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
+    <button id="timeline-toggle">Timeline</button>
     <button id="export-svg">SVG</button>
     <button id="export-dxf">DXF</button>
-    <button id="settings-btn">API Settings</button>
-    <button id="chat-toggle">Chat</button>
+    <button id="settings-btn">API</button>
   </div>
-</header>
+</nav>
 
 <main id="workspace">
   <canvas id="canvas"></canvas>
@@ -34,19 +45,9 @@
     <span id="hint">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Double-tap a dimension to type its value</span>
   </div>
 
-  <aside id="side">
-    <section id="chat-panel">
-      <h2>AI Designer</h2>
-      <div id="chat-log"></div>
-      <form id="chat-form">
-        <input id="chat-input" type="text" placeholder='Try: "draw me a star, radius 60"' autocomplete="off">
-        <button type="submit" id="send-btn">Send</button>
-      </form>
-    </section>
-    <section id="timeline-panel">
-      <h2>Timeline</h2>
-      <ul id="timeline"></ul>
-    </section>
+  <aside id="timeline-panel">
+    <h2>Timeline</h2>
+    <ul id="timeline"></ul>
   </aside>
 </main>
 
