@@ -151,3 +151,7 @@ outside-click dismissal. The closed Timeline is inert. The Stop button cancels
 in-flight requests; changing the drawing discards stale AI results. API keys
 are never written to localStorage/sessionStorage or echoed into the console.
 The app removes the old persisted `vectorforge.connection` entry on startup.
+
+Static assets and module imports carry a shared release query version. Bump it
+in `index.html`, `js/main.mjs`, and `js/dxf.mjs` when shipping changed modules
+to prevent returning browsers from combining cached code with new HTML.

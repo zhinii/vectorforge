@@ -1,8 +1,8 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs';
-import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs';
-import { toDXF, toSVG, download } from './dxf.mjs';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-1';
+import { askAgent, validateConnection, DEFAULTS, RELAY } from './agent.mjs?v=20261023-1';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-1';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
