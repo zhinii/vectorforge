@@ -1,10 +1,10 @@
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-6';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-6';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-6';
-import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-6';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-6';
+         distanceToEntity, moveEntity, isClosed } from './model.mjs?v=20261023-7';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-7';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-7';
+import { snapPoint, nearbyMeasurements } from './spatial.mjs?v=20261023-7';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-7';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -670,6 +670,8 @@ function addMsg(cls, text, who, translate = true) {
 function setBusy(busy) {
   document.getElementById('cancel-request').hidden = !busy;
   document.getElementById('send-btn').disabled = busy;
+  document.getElementById('connect-btn').disabled = busy;
+  document.getElementById('settings-save').disabled = busy;
   document.getElementById('chat-form').setAttribute('aria-busy', String(busy));
 }
 function cancelRequest(message = 'Request stopped. Nothing from it was applied.') {
@@ -723,22 +725,27 @@ async function testConnection(config) {
   } finally { if (activeRequest === request) { activeRequest = null; setBusy(false); } }
 }
 async function checkServerConnection() {
-  cancelRequest(null);
+  // A second console/dialog click must not cancel or silently replace a handshake.
+  if (activeRequest) return;
+  addMsg('ai', 'Checking the connection…');
   const request = {kind:'health',controller:new AbortController()};
   activeRequest=request; setBusy(true); setConn('checking');
-  const timer=setTimeout(()=>request.controller.abort(),10000);
+  let timedOut = false;
+  const timer=setTimeout(()=>{ timedOut = true; request.controller.abort(); },10000);
   try {
     const status=await readRelayStatus(connection,request.controller.signal);
     if (activeRequest!==request) return;
     if (!status.serverConfigured) throw Error('server_configuration');
     connection.model=status.serverModel || DEFAULTS.model;
     setConn('ready');
+    addMsg('ai', 'Drawing service ready. Send a drawing command; the first response will verify the AI provider.');
   } catch(error) {
     if(activeRequest!==request) return;
-    setConn('error'); addMsg('err',errorText(error));
+    setConn('error'); addMsg('err',errorText(timedOut ? new Error('timeout') : error));
   } finally { clearTimeout(timer); if(activeRequest===request) {activeRequest=null;setBusy(false);} }
 }
 document.getElementById('connect-btn').addEventListener('click', () => {
+  if (activeRequest) return;
   if (connection.mode === 'byok') { openConnectionSettings(); return; }
   checkServerConnection();
 });
@@ -763,6 +770,7 @@ connLight.addEventListener('click', openConnectionSettings);
 dlg.addEventListener('close', () => { document.getElementById('set-key').value = ''; });
 document.getElementById('settings-form').addEventListener('submit', ev => {
   ev.preventDefault();
+  if (activeRequest) return;
   let config;
   try { config = validateConnection({
     mode: document.getElementById('set-mode').value,
@@ -774,8 +782,9 @@ document.getElementById('settings-form').addEventListener('submit', ev => {
   }); } catch (error) {
     const feedback = document.getElementById('settings-error'); feedback.textContent = t(errorText(error)); feedback.hidden = false; return;
   }
-  dlg.close(); addMsg('ai', 'Checking the connection…');
-  if (config.mode === 'server') { connection = config; history.length = 0; checkServerConnection(); } else testConnection(config);
+  dlg.close();
+  if (config.mode === 'server') { connection = config; history.length = 0; checkServerConnection(); }
+  else { addMsg('ai', 'Checking the connection…'); testConnection(config); }
 });
 document.getElementById('settings-disconnect').addEventListener('click', () => {
   cancelRequest(null); connection.key = ''; history.length = 0; setConn('off'); dlg.close();
@@ -847,5 +856,5 @@ window.addEventListener('blur', () => { drag = null; toolTap = null; pointers.cl
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(canvas);
 resize(); refreshTimeline(); setTool('select');
-addMsg('ai', 'VectorForge ready. The prototype uses the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.');
-checkServerConnection();
+addMsg('ai', 'VectorForge ready. Click Connect to use the saved server key; no paste or sign-in is needed. Advanced connection options are available through the status light. Manual drawing and export work offline.');
+setConn('off');
