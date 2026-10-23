@@ -6,7 +6,9 @@ export const DEFAULTS = {
   base: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
   model: 'qwen3.8-flash',
 };
-export const RELAY = 'https://bnta-robot-lab-connection.zhinii.chatgpt.site/api/chat';
+// The CAD relay (see server/cad-relay-route.ts) must be deployed for browser use:
+// Alibaba endpoints send no CORS headers, so direct browser calls are blocked.
+export const RELAY = 'https://bnta-robot-lab-connection.zhinii.chatgpt.site/api/cad-chat';
 
 const SYSTEM = `You are the AI designer inside a 2D CAD sketcher. The user asks for vector designs in plain language; you answer with a short reply plus drawing operations. Units are millimetres, coordinates are y-up, origin at canvas centre.
 Return JSON only: {"reply":"one short sentence","needsInput":false,"ops":[...]}. Maximum 24 ops. If the request is ambiguous in a way that changes the design (which object, what size), ask ONE short question with needsInput:true and ops:[].
@@ -71,11 +73,12 @@ export async function askAgent(connection, { question, history, scene }, signal,
     { role: 'user', content: JSON.stringify({ question, scene }) },
   ];
   const needsRelay = new URL(config.base).hostname.startsWith('token-plan.') && connection.useRelay !== false;
+  const relayUrl = connection.relay || RELAY;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let response;
     try {
-      response = await fetcher(needsRelay ? RELAY : config.base + '/chat/completions', {
+      response = await fetcher(needsRelay ? relayUrl : config.base + '/chat/completions', {
         method: 'POST', signal,
         headers: { 'Content-Type': 'application/json',
           ...(!needsRelay ? { 'Authorization': 'Bearer ' + config.key } : {}),
@@ -85,10 +88,14 @@ export async function askAgent(connection, { question, history, scene }, signal,
       });
     } catch (error) {
       if (attempt === 0 && error instanceof TypeError && !signal?.aborted) continue;
+      // TypeError after retry = browser blocked the cross-origin call (no CORS
+      // headers on Alibaba endpoints) or the network is down.
+      if (error instanceof TypeError) throw Error('cors');
       throw error;
     }
     if (attempt === 0 && [502, 503, 504].includes(response.status)) continue;
     if (!response.ok) {
+      if (needsRelay && response.status === 404) throw Error('relay_missing');
       throw Error(({ 401: 'auth', 403: 'auth', 429: 'quota', 400: 'model', 404: 'model' })[response.status] || 'provider');
     }
     const data = await response.json();
