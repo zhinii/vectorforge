@@ -406,12 +406,44 @@ document.getElementById('settings-save').addEventListener('click', ev => {
   }
   localStorage.setItem(LS_KEY, JSON.stringify(c));
   dlg.close();
-  addMsg('ai', 'Connection saved. Ask me to draw something — e.g. "draw me a star, radius 60".');
+  addMsg('ai', 'Settings saved. Testing the connection…');
+  testConnection(c);
 });
 
 // ---- timeline drawer toggle ----
 const timelinePanel = document.getElementById('timeline-panel');
 document.getElementById('timeline-toggle').addEventListener('click', () => timelinePanel.classList.toggle('open'));
+
+// ---- connection state + status light ----
+// The AI console is locked until a real round-trip to the model succeeds.
+const connLight = document.getElementById('conn-light');
+let connState = 'off';
+function setConn(state, detail) {
+  connState = state;
+  connLight.className = state;
+  connLight.title = detail || {
+    off: 'not connected — paste your API key (sk-…)',
+    checking: 'checking connection…',
+    on: 'connected',
+    error: 'connection failed — re-paste key to retry',
+  }[state];
+}
+
+async function testConnection(conn, { quiet = false } = {}) {
+  setConn('checking');
+  try {
+    await askAgent(conn, { question: 'connection_check', history: [], scene: serializeScene(doc) });
+    setConn('on', 'connected — ' + conn.model);
+    if (!quiet) addMsg('ai', `Connected to ${conn.model}. Green light is on — describe a design, e.g. "draw me a star, radius 60".`);
+    return true;
+  } catch (e) {
+    setConn('error');
+    const why = { auth: 'the key was rejected (401/403)', quota: 'quota exhausted on this key',
+      model: 'model/endpoint mismatch', endpoint: 'endpoint is not an allowed Alibaba https URL' }[e.message];
+    addMsg('err', `Connection test failed${why ? ': ' + why : ' (' + e.message + ')'}. Re-paste the key to retry.`);
+    return false;
+  }
+}
 
 // ---- chat ----
 const history = [];
@@ -442,14 +474,19 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
     try {
       validateConnection(c);
       localStorage.setItem(LS_KEY, JSON.stringify(c));
-      addMsg('ai', 'Connected — API key saved in this browser only. Now describe a design, e.g. "draw me a star, radius 60".');
+      addMsg('ai', 'Key saved. Testing the connection…');
+      testConnection(c);
     } catch { addMsg('err', 'That key was rejected (format check failed). Nothing was saved.'); }
     return;
   }
   addMsg('user', q);
   const conn = loadConn();
-  if (!conn.key) {
-    addMsg('err', 'Not connected yet. Paste your Qwen API key here in the console (it starts with "sk-") and I\'ll save it in this browser only.');
+  if (connState !== 'on') {
+    addMsg('err', !conn.key
+      ? 'No confirmed API connection. Paste your Qwen API key (sk-…) here and wait for the green light.'
+      : connState === 'checking'
+        ? 'Still checking the connection — one moment.'
+        : 'No confirmed connection (red light). Re-paste your key to retry, or check API settings.');
     return;
   }
   const thinking = addMsg('ai', '…', 'ai >');
@@ -468,7 +505,8 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
     }
   } catch (e) {
     thinking.remove();
-    const why = { auth: 'Authentication failed — check the API key under API.',
+    if (['auth', 'endpoint', 'model'].includes(e.message)) setConn('error');
+    const why = { auth: 'Authentication failed — the key was rejected; re-paste it to retry.',
       quota: 'Quota exhausted on this key.',
       endpoint: 'Endpoint rejected — only Alibaba https endpoints are allowed.',
       model: 'Model/endpoint mismatch — check API settings.',
@@ -484,4 +522,14 @@ view.oy = canvas.clientHeight / 2 || 400;
 window.addEventListener('resize', resize);
 resize();
 refreshTimeline();
-addMsg('ai', 'VectorForge ready. Paste your Qwen API key (sk-…) here to connect, then describe a design — or draw with the chips below. Drag grips to reshape; double-tap a dimension to type its value.');
+addMsg('ai', 'VectorForge ready. Paste your Qwen API key (sk-…) here to connect — the light turns green only after a successful test call. Then describe a design, or draw with the chips below.');
+// If a key was saved previously, re-verify it on load before unlocking the AI.
+{
+  const saved = loadConn();
+  if (saved.key) {
+    addMsg('ai', 'Saved key found — verifying…');
+    testConnection(saved, { quiet: true }).then(ok => {
+      if (ok) addMsg('ai', `Reconnected to ${saved.model}. Green light is on.`);
+    });
+  }
+}
