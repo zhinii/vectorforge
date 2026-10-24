@@ -1,12 +1,12 @@
-import { constructionPreview } from './construction.mjs?v=20261024-10';
-import { initWorkflow } from './workflow.mjs?v=20261024-10';
+import { constructionPreview } from './construction.mjs?v=20261024-11';
+import { initWorkflow } from './workflow.mjs?v=20261024-11';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-10';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-10';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-10';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-10';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-10';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-11';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-11';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-11';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-11';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-11';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -203,9 +203,9 @@ function drawConstruction() {
     ctx.stroke();
   }
   ctx.setLineDash([]); ctx.font = '12px system-ui';
-  // A next point can coincide with the last tap. Keep the committed marker
-  // visible instead of painting an uncommitted marker over it.
-  const markers = preview.markers.filter(m => m.kind === 'committed' || !preview.markers.some(f => f.kind === 'committed' && f.point[0] === m.point[0] && f.point[1] === m.point[1]));
+  // Nearby next-point labels can obscure the last tap at any zoom level.
+  // Keep the committed marker and label visible within a 14px screen radius.
+  const markers = preview.markers.filter(m => m.kind === 'committed' || !preview.markers.some(f => f.kind === 'committed' && Math.hypot(f.point[0]-m.point[0],f.point[1]-m.point[1])*view.s < 14));
   for (const marker of markers) {
     const p=w2s(marker.point), committed=marker.kind==='committed';
     ctx.fillStyle=committed?'#ffb84d':'#10131a'; ctx.strokeStyle=committed?'#ffb84d':'#61b5ff';
@@ -227,7 +227,7 @@ function updateConstructionGuide() {
   const step = document.getElementById('construction-step'); if (step.textContent !== text) step.textContent = text;
   document.getElementById('construction-cancel').disabled = !pending;
 }
-function cancelConstruction() { pending=null; toolTap=null; snapTarget=null; draw(); }
+function cancelConstruction() { pending=null; toolTap=null; snapTarget=null; setHint(tool === 'bezier' ? 'Click the start point' : tool === 'arc' ? 'Click the centre point' : ''); draw(); }
 
 // ---- rendering ----
 function draw() {

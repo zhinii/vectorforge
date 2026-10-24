@@ -1,5 +1,5 @@
 // DXF R2000 (ASCII) + exact SVG export. Model and DXF coordinates are y-up.
-import { entityPoints, isClosed, arcAngles, normalizeAngle, BEZIER_TOLERANCE, BEZIER_MAX_DEPTH, validateText, MAX_TEXT_SIZE, MAX_VALUE, MAX_PATH_POINTS, MAX_SCENE_POINTS, MAX_SCENE_ENTITIES, LAYERS, assertSceneBudget } from './model.mjs?v=20261024-10';
+import { entityPoints, isClosed, arcAngles, normalizeAngle, BEZIER_TOLERANCE, BEZIER_MAX_DEPTH, validateText, MAX_TEXT_SIZE, MAX_VALUE, MAX_PATH_POINTS, MAX_SCENE_POINTS, MAX_SCENE_ENTITIES, LAYERS, assertSceneBudget } from './model.mjs?v=20261024-11';
 
 export function checkEntity(e) {
   if (!e || typeof e !== 'object') throw Error('Cannot export invalid entity');
