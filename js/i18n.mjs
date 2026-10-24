@@ -1,9 +1,13 @@
-import { workflowCatalog } from './workflow-i18n.mjs?v=20261024-13';
+import { workflowCatalog } from './workflow-i18n.mjs?v=20261024-14';
 
 // Deterministic English / Simplified Chinese UI catalog. Never translate CAD
 // operation names in model data or user/AI conversation content implicitly.
 export const catalogs = Object.freeze({
   en: Object.freeze({
+  "guided.useSuggestion": "Use suggested line",
+  "guided.approximate": "Orange segments are approximate. Adjust their points after accepting.",
+  "guided.approximateName": "(approximate)",
+
   "Choose a tool, then tap points on the canvas. Curves preview as you go.": "Choose a tool, then tap points on the canvas. Curves preview as you go.",
   "Take or choose a picture. Then tap Guided trace and mark the edge you want.": "Take or choose a picture. Then tap Guided trace and mark the edge you want.",
   "Local only. Your picture is not sent to AI.": "Local only. Your picture is not sent to AI.",
@@ -49,7 +53,7 @@ export const catalogs = Object.freeze({
   "guided.scaleStaged": "Known length is staged. Photo and trace will scale together on acceptance.",
   "guided.calibrated": "Keeping the calibrated image scale.",
   "guided.unscaled": "Unverified size. Check dimensions before cutting.",
-  "guided.uncertain": "This edge is uncertain. Add a closer point on a clear edge; no guessed segment was added.",
+  "guided.uncertain": "Pixels are uncertain. Add a closer point, or use the orange suggested straight line. It is approximate, not a detected edge.",
   "guided.stale": "The image or document changed. Start Guided trace again.",
   "guided.noImage": "Select a photo before starting Guided trace.",
   "guided.rasterError": "The photo pixels could not be read. Reselect or import the photo and try again.",
@@ -378,6 +382,10 @@ export const catalogs = Object.freeze({
   "That text is outside the supported drawing range.": "That text is outside the supported drawing range."
 }),
   zh: Object.freeze({
+  "guided.useSuggestion": "使用建议直线",
+  "guided.approximate": "橙色线段是近似建议。接受后可调整控制点。",
+  "guided.approximateName": "（近似）",
+
   "Choose a tool, then tap points on the canvas. Curves preview as you go.": "选择工具，然后点击画布上的点。曲线会实时预览。",
   "Take or choose a picture. Then tap Guided trace and mark the edge you want.": "拍摄或选择照片。然后点击引导描摹，标出需要的边界。",
   "Local only. Your picture is not sent to AI.": "仅在本机处理。照片不会发送给 AI。",
@@ -423,7 +431,7 @@ export const catalogs = Object.freeze({
   "guided.scaleStaged": "已设置已知长度。接受时照片和描摹路径将一起缩放。",
   "guided.calibrated": "保留已校准的图片比例。",
   "guided.unscaled": "尺寸未经验证。切割前请检查尺寸。",
-  "guided.uncertain": "此边缘不确定。请在清晰边缘上选择更近的点；未添加猜测线段。",
+  "guided.uncertain": "像素边界不确定。请添加更近的点，或使用橙色建议直线。它是近似线，不是检测到的边界。",
   "guided.stale": "图片或文档已改变。请重新开始引导描摹。",
   "guided.noImage": "开始引导描摹前请选择照片。",
   "guided.rasterError": "无法读取照片像素。请重新选择或导入照片后重试。",

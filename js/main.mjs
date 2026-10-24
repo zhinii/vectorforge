@@ -1,16 +1,16 @@
-import { referencePoint } from './project.mjs?v=20261024-13';
-import { initGuidedTrace } from './guided-trace-ui.mjs?v=20261024-13';
-import { initSketch } from './sketch-ui.mjs?v=20261024-13';
-import { createDesignPreview, acceptDesignPreview, reconcileSketches, discardDesignPreview as rejectDesignPreview, designContentSignature } from './preview.mjs?v=20261024-13';
-import { constructionPreview } from './construction.mjs?v=20261024-13';
-import { initWorkflow } from './workflow.mjs?v=20261024-13';
+import { referencePoint } from './project.mjs?v=20261024-14';
+import { initGuidedTrace } from './guided-trace-ui.mjs?v=20261024-14';
+import { initSketch } from './sketch-ui.mjs?v=20261024-14';
+import { createDesignPreview, acceptDesignPreview, reconcileSketches, discardDesignPreview as rejectDesignPreview, designContentSignature } from './preview.mjs?v=20261024-14';
+import { constructionPreview } from './construction.mjs?v=20261024-14';
+import { initWorkflow } from './workflow.mjs?v=20261024-14';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-13';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-13';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-13';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-13';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-13';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-14';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-14';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-14';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-14';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-14';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');

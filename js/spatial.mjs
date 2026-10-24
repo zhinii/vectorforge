@@ -1,6 +1,6 @@
 // Read-only CAD geometry. Coordinates are world units; scale is px/unit.
 // Curves remain analytic: no sampled circle/arc vertices enter these helpers.
-import { arcAngles, entityPoints, isClosed, dist, normalizeAngle } from './model.mjs?v=20261024-13';
+import { arcAngles, entityPoints, isClosed, dist, normalizeAngle } from './model.mjs?v=20261024-14';
 
 const ANGLE_EPS = 1e-9;
 const finitePoint = p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
