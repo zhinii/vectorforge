@@ -12,3 +12,52 @@ test('project rejects active SVG/remote sources and oversized raster declaration
 test('project rejects duplicate or orphan annotations and invalid numeric settings',()=>{assert.throws(()=>validateReferences([reference,{...reference}]));assert.throws(()=>validateReferences([{...reference,rotation:Infinity}]));assert.throws(()=>validateReferences([reference],[{id:'a',referenceId:'missing',type:'note',a:[0,0],offset:[0,0],text:'a'}]));});
 
 test('traced pixel boundaries align with top-left and bottom-right of a rotated underlay',()=>{const ops=traceOnReference([{op:'path',points:[[0,20],[10,0]],closed:false}],reference,10,20);assert.deepEqual(ops[0].points[0],referencePoint(reference,[0,0]));assert.deepEqual(ops[0].points[1],referencePoint(reference,[1,1]));});
+
+// Optional reconstruction metadata extends v1 without breaking existing files.
+import { reconstructSketch } from '../js/sketch.mjs';
+const rectangleSpec={version:1,kind:'rectangle',anchor:[20,30],rotation:25,dimensions:{width:100,height:50},referenceId:'image-1',bindings:{width:'annotation-1'}};
+function reconstructedProject(){
+  const doc=createDoc(), result=reconstructSketch(rectangleSpec,{group:'panel-1'});
+  applyOps(doc,result.ops);doc.sketches={'panel-1':result.spec};
+  doc.references=[reference];doc.annotations=[{id:'annotation-1',referenceId:'image-1',type:'dimension',a:[0,0],b:[1,0],value:100,offset:[2,3],text:'known'}];
+  return doc;
+}
+test('project preserves validated reconstruction dimensions and provenance despite replay IDs changing',()=>{
+  const doc=reconstructedProject();doc.entities[0].id='e90000';const restored=decodeProject(encodeProject(doc));
+  assert.deepEqual(restored.sketches,doc.sketches);
+  assert.notEqual(restored.entities[0].id,doc.entities[0].id);
+  assert.equal(restored.entities[0].group,'panel-1');
+  assert.deepEqual(restored.entities[0].points,doc.entities[0].points);
+  assert.deepEqual(restored.references,doc.references);assert.deepEqual(restored.annotations,doc.annotations);
+});
+test('legacy v1 projects load with no reconstruction records',()=>{
+  const data=JSON.parse(encodeProject(reconstructedProject()));delete data.sketches;
+  const restored=decodeProject(JSON.stringify(data));assert.deepEqual(restored.sketches,{});assert.equal(restored.entities.length,1);
+});
+test('reconstruction registry rejects malformed, excessive or stale geometry recipes',()=>{
+  const data=JSON.parse(encodeProject(reconstructedProject()));
+  for(const sketches of [null,[],false,{'panel-1':{...rectangleSpec,version:2}},Object.fromEntries(Array.from({length:201},(_,i)=>['panel-'+i,rectangleSpec]))]){
+    assert.throws(()=>decodeProject(JSON.stringify({...data,sketches})));
+  }
+  const stale=structuredClone(data);stale.sketches['panel-1'].dimensions.width=200;
+  assert.throws(()=>decodeProject(JSON.stringify(stale)),/sketch.stale/);
+  const doc=reconstructedProject();doc.entities[0].points[1][0]+=1;
+  assert.throws(()=>encodeProject(doc),/sketch.stale/);
+});
+test('registry allowlist discards unrecognized fields and orphan records rather than restoring geometry',()=>{
+  const doc=reconstructedProject();doc.sketches['panel-1'].secret='private-token';
+  doc.sketches['missing-group']={...rectangleSpec};
+  const text=encodeProject(doc), restored=decodeProject(text);
+  assert.doesNotMatch(text,/private-token|missing-group/);
+  assert.equal(restored.entities.length,1);
+  assert.deepEqual(Object.keys(restored.sketches),['panel-1']);
+});
+test('registry prototype-shaped keys cannot alter object prototypes',()=>{
+  const data=JSON.parse(encodeProject(reconstructedProject()));
+  data.sketches=JSON.parse('{"__proto__":{"version":1,"kind":"circle","anchor":[0,0],"rotation":0,"dimensions":{"radius":5}}}');
+  const restored=decodeProject(JSON.stringify(data));
+  assert.equal(Object.getPrototypeOf(restored.sketches),Object.prototype);
+  assert.equal(Object.hasOwn(restored.sketches,'__proto__'),false);
+  assert.equal({}.kind,undefined);
+});
+test('reference opacity must be finite',()=>{assert.throws(()=>validateReferences([{...reference,opacity:NaN}]));});

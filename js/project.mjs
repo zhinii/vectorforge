@@ -1,6 +1,7 @@
 // Versioned local-only project format. Never stores connection settings or chat.
-import { createDoc, applyOps, serializeScene, validateText } from './model.mjs?v=20261024-11';
-import { inspectRaster } from './import.mjs?v=20261024-11';
+import { createDoc, applyOps, serializeScene } from './model.mjs?v=20261024-12';
+import { inspectRaster } from './import.mjs?v=20261024-12';
+import { validateSketchRegistry } from './sketch.mjs?v=20261024-12';
 export const MAX_PROJECT_BYTES = 16 * 1024 * 1024;
 export function referencePoint(ref, uv) {
   const a = ref.rotation * Math.PI / 180, x = (uv[0] - .5) * ref.width, y = (.5 - uv[1]) * ref.height;
@@ -26,7 +27,7 @@ export function validateReferences(refs, annotations=[]) {
   const ids = new Set();
   const references=refs.map(r=>{
     if(!r||typeof r.id!=='string'||!/^[\w-]{1,80}$/.test(r.id)||ids.has(r.id)||!label(r.name)||!pair(r.center)||
-      ![r.width,r.height].every(v=>finite(v)&&v>=.01&&v<=100000)||!finite(r.rotation)||typeof r.opacity!=='number'||r.opacity<.05||r.opacity>1||
+      ![r.width,r.height].every(v=>finite(v)&&v>=.01&&v<=100000)||!finite(r.rotation)||typeof r.opacity!=='number'||!Number.isFinite(r.opacity)||r.opacity<.05||r.opacity>1||
       typeof r.dataURL!=='string'||r.dataURL.length>4*1024*1024||!/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(r.dataURL)) throw Error('invalid_reference');
     const bytes=Uint8Array.from(atob(r.dataURL.split(',')[1]),c=>c.charCodeAt(0)); const meta=inspectRaster(bytes);
     if(meta.width>1024||meta.height>1024)throw Error('reference_dimensions');
@@ -44,7 +45,8 @@ export function validateReferences(refs, annotations=[]) {
 }
 export function encodeProject(doc) {
   const extra=validateReferences(doc.references||[],doc.annotations||[]);
-  const result=JSON.stringify({format:'VectorForge',version:1,units:'mm',entities:serializeScene(doc).entities,...extra},null,2);
+  const sketches=validateSketchRegistry(doc.sketches===undefined?{}:doc.sketches,doc.entities);
+  const result=JSON.stringify({format:'VectorForge',version:1,units:'mm',entities:serializeScene(doc).entities,...extra,sketches},null,2);
   if(result.length>MAX_PROJECT_BYTES)throw Error('project_limit');
   return result;
 }
@@ -56,7 +58,9 @@ export function decodeProject(text) {
   const types=new Set(['path','line','bezier','circle','arc','rect','polygon','star','text']);
   const ops=data.entities.map(e=>{if(!e||typeof e!=='object'||!types.has(e.type))throw Error('invalid_project');return {...e,op:e.type};});
   applyOps(doc,ops,'project');
-  Object.assign(doc,extra); return doc;
+  // Reconstruction recipes bind to stable group names, not replay-generated IDs.
+  const sketches=validateSketchRegistry(data.sketches===undefined?{}:data.sketches,doc.entities);
+  Object.assign(doc,extra,{sketches}); return doc;
 }
 export function annotationLabel(a) {return a.type==='note'?a.text:`${a.value} mm${a.text?' · '+a.text:''}`;}
 

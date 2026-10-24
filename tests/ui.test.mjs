@@ -8,6 +8,8 @@ import * as dxf from '../js/dxf.mjs';
 import * as i18n from '../js/i18n.mjs';
 import * as spatial from '../js/spatial.mjs';
 import {initWorkflow} from '../js/workflow.mjs';
+import {initSketch} from '../js/sketch-ui.mjs';
+import {createDesignPreview,acceptDesignPreview,reconcileSketches,discardDesignPreview as rejectDesignPreview,designContentSignature} from '../js/preview.mjs';
 import {constructionPreview} from '../js/construction.mjs';
 
 // DOM contract/event regression harness, not a browser or layout/focus-trap test.
@@ -87,10 +89,10 @@ function setup({ deferredHealth = false, quickTimeout = false } = {}) {
     if (!deferredHealth) {healthCalls.push({url,options});return Promise.resolve(healthResult());}
     return new Promise((resolve,reject)=>{healthCalls.push({url,options,resolve,reject});options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});
   } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
-  const context = vm.createContext({ constructionPreview, initWorkflow, structuredClone, ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
+  const context = vm.createContext({ initSketch, createDesignPreview,acceptDesignPreview,reconcileSketches,rejectDesignPreview,designContentSignature, constructionPreview, initWorkflow, structuredClone, ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
     AbortController, URL, console, setTimeout:(fn,ms)=>setTimeout(fn,quickTimeout && ms===10000 ? 1 : ms), clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
   const source = readFileSync(new URL('../js/main.mjs', import.meta.url), 'utf8').replace(/^import[^]*?from\s+'[^']+';\s*/gm, '');
-  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled, workflow, mouse });', context, { filename: 'main.mjs' });
+  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled, workflow, mouse, sketch, designPreview });', context, { filename: 'main.mjs' });
   const el = id => document.getElementById(id);
   const click = async id => { el(id).focus(); await el(id).dispatch('click'); };
   const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -175,6 +177,7 @@ test('connect through API form and design success are transient, transactional a
   await h.respond(0); assert.equal(h.state().connState, 'on');
   const done = h.submit('chat-form', 'draw a 10mm circle'); assert.equal(h.el('cancel-request').hidden, false); assert.equal(h.el('send-btn').disabled, true);
   await h.respond(1, { reply: 'Circle created', ops: [{ op: 'circle', center: [0, 0], radius: 10 }] }); await done;
+  assert.equal(h.el('ai-preview-dialog').open,true); await h.click('ai-preview-accept');
   assert.equal(h.state().doc.entities[0].r, 10); assert.equal(h.state().history.length, 2); assert.equal(h.el('send-btn').disabled, false); assert.equal(h.el('cancel-request').hidden, true);
   await h.click('undo'); assert.equal(h.state().doc.entities.length, 0); await h.click('redo'); assert.equal(h.state().doc.entities.length, 1);
   assert.ok(h.storageCalls.every(([action]) => action === 'remove')); assert.doesNotMatch(h.log(), /sk-testdummy12345/);
@@ -204,6 +207,7 @@ test('manual geometry edits abort pending AI but selection-only changes preserve
   assert.equal(h.requests[1].options.signal.aborted, true); await h.respond(1, { reply: 'Late', ops: [{ op: 'clear' }] }); await done; assert.equal(h.state().doc.entities.length, 1);
   done = h.submit('chat-form', 'make selected bigger'); await h.tool('select'); await h.tap(100, 100); assert.equal(h.state().doc.selectedId, null);
   await h.respond(2, { reply: 'Applied to original scene', ops: [{ op: 'circle', center:[30,0], radius:5 }] }); await done;
+  assert.equal(h.el('ai-preview-dialog').open,true); await h.click('ai-preview-accept');
   assert.equal(h.state().doc.entities.length, 2); assert.doesNotMatch(h.log(), /selection or drawing changed/); assert.match(h.log(), /Applied to original scene/);
 });
 
@@ -437,6 +441,7 @@ test('saved-server mode requires explicit Connect before drawing without browser
   assert.equal(h.requests[0].options.headers['X-VectorForge-Auth'],'server');
   assert.equal(h.requests[0].options.headers.Authorization,undefined);
   await h.respond(0,{reply:'Created',ops:[{op:'circle',center:[0,0],radius:10}]}); await done;
+  assert.equal(h.el('ai-preview-dialog').open,true); await h.click('ai-preview-accept');
   assert.equal(h.state().connState,'on'); assert.equal(h.state().doc.entities.length,1);
 });
 
@@ -510,6 +515,7 @@ async function translationScene(ops) {
   const h=setup(); await h.connect();
   const done=h.submit('chat-form','Create translation snap fixtures');
   await h.respond(1,{reply:'Fixtures ready',ops}); await done;
+  assert.equal(h.el('ai-preview-dialog').open,true); await h.click('ai-preview-accept');
   await h.click('measurements-toggle');
   // Deselect first so the grab is deliberately not a resize/rotation grip.
   await h.tap(100,600);
@@ -641,4 +647,40 @@ test('curve Cancel, pointercancel, unexpected capture loss, tool switch and Esca
 });
 test('curve step guidance and construction markers switch language without changing points',async()=>{
   const h=setup();await h.tool('bezier');await h.tap(400,400);const pending=JSON.stringify(h.state().pending);h.el('canvas').calls.length=0;await h.click('language-toggle');assert.match(h.el('construction-step').textContent,/贝塞尔 2\/4/);assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='起点'));assert.equal(JSON.stringify(h.state().pending),pending);assert.equal(h.el('construction-cancel').textContent,'取消');
+});
+
+test('AI proposal requires acceptance; reject, close and Escape leave document and history untouched',async()=>{
+  for(const close of ['ai-preview-reject','ai-preview-close','escape']){const h=setup();await h.connect();const done=h.submit('chat-form','circle');await h.respond(1,{reply:'Proposed circle',ops:[{op:'circle',center:[0,0],radius:10}]});await done;
+    assert.equal(h.state().doc.entities.length,0);assert.equal(h.state().doc.timeline.length,0);assert.equal(h.state().undoStack.length,0);assert.equal(h.state().history.length,0);assert.equal(h.el('ai-preview-dialog').open,true);
+    if(close==='escape')h.el('ai-preview-dialog').nativeEscape();else await h.click(close);assert.equal(h.state().designPreview,null);assert.equal(h.state().doc.entities.length,0);assert.equal(h.state().history.length,0);
+  }
+});
+test('AI accepts once as one undo step and refuses changed local reference state',async()=>{
+  const h=setup();await h.connect();let done=h.submit('chat-form','circle');await h.respond(1,{reply:'Preview',ops:[{op:'circle',center:[0,0],radius:10}]});await done;await h.click('ai-preview-accept');await h.click('ai-preview-accept');assert.equal(h.state().doc.entities.length,1);assert.equal(h.state().undoStack.length,1);await h.click('undo');assert.equal(h.state().doc.entities.length,0);
+  done=h.submit('chat-form','circle');await h.respond(2,{reply:'Preview',ops:[{op:'circle',center:[0,0],radius:20}]});await done;h.state().doc.annotations.push({text:'changed local note'});await h.click('ai-preview-accept');assert.equal(h.state().doc.entities.length,0);assert.match(h.log(),/fresh preview/);
+});
+const addReferenceFixture=h=>{h.state().doc.references=[{id:'image-1',name:'Local sketch',dataURL:'data:image/png;base64,AA==',center:[0,0],width:100,height:100,rotation:0,opacity:.5,locked:true,calibrated:false}];};
+test('direct locked image selection deletes image and attached notes, not vectors; Undo restores',async()=>{
+  const h=setup();addReferenceFixture(h);h.state().doc.annotations=[{id:'note1',referenceId:'image-1',type:'note',a:[.1,.1],offset:[0,0],text:'note'}];model.applyOps(h.state().doc,[{op:'line',from:[-10,0],to:[10,0]}]);
+  await h.tap(420,430);assert.equal(h.state().doc.selectedReferenceId,'image-1');assert.equal(h.state().doc.selectedId,null);assert.equal(h.el('reference-context').hidden,false);assert.equal(h.state().undoStack.length,0);
+  await h.click('reference-context-delete');assert.equal(h.state().doc.references.length,0);assert.equal(h.state().doc.annotations.length,0);assert.equal(h.state().doc.entities.length,1);await h.click('undo');assert.equal(h.state().doc.references.length,1);assert.equal(h.state().doc.annotations.length,1);
+});
+test('vectors have selection priority over image and drawing tools never select underlays',async()=>{
+  const h=setup();addReferenceFixture(h);model.applyOps(h.state().doc,[{op:'line',from:[-10,0],to:[10,0]}]);await h.tap(500,350);assert.equal(h.state().doc.selectedId,h.state().doc.entities[0].id);assert.equal(h.state().doc.selectedReferenceId,null);
+  await h.tool('circle');await h.tap(420,430);await h.tap(460,430);assert.equal(h.state().doc.entities.length,2);assert.equal(h.state().doc.selectedReferenceId,null);
+});
+test('second touch cancels image manipulation before pinch and leaves no phantom undo',async()=>{
+  const h=setup();addReferenceFixture(h);h.state().doc.references[0].locked=false;await h.pointer('pointerdown',420,430,{pointerType:'touch'});await h.pointer('pointermove',460,450,{pointerType:'touch'});assert.notEqual(h.state().doc.references[0].center.join(','),'0,0');await h.pointer('pointerdown',600,400,{pointerType:'touch',pointerId:2});assert.equal(h.state().doc.references[0].center.join(','),'0,0');await h.pointer('pointermove',650,400,{pointerType:'touch',pointerId:2});await h.pointer('pointerup',460,450,{pointerType:'touch'});await h.pointer('pointerup',650,400,{pointerType:'touch',pointerId:2});assert.equal(h.state().undoStack.length,0);
+});
+
+test('image landmarks and assigned dimensions rebuild clean geometry, edit linked dimensions and undo atomically',async()=>{
+  const h=setup();addReferenceFixture(h);h.state().doc.annotations=[{id:'width-note',referenceId:'image-1',type:'dimension',a:[0,0],b:[1,0],value:80,text:'width',offset:[0,0]}];await h.tap(420,430);await h.click('reference-context-sketch');assert.equal(h.el('sketch-dialog').open,true);
+  h.el('sketch-kind').value='rectangle';await h.el('sketch-kind').dispatch('change');await h.click('sketch-pick');await h.tap(400,400);await h.tap(520,400);await h.tap(520,360);assert.equal(h.el('sketch-dialog').open,true);
+  const widthBox=h.el('sketch-fields').children[0],noteSelect=widthBox.children.find(e=>e.tagName==='SELECT');noteSelect.value='width-note';await noteSelect.dispatch('change');assert.equal(Number(h.el('sketch-value-width').value),80);
+  h.el('sketch-value-height').value='40';h.el('sketch-confirm').checked=true;await h.click('sketch-preview');assert.equal(h.state().doc.entities.length,0);assert.equal(h.state().undoStack.length,0);await h.click('sketch-accept');
+  let e=h.state().doc.entities[0];assert.equal(e.type,'path');assert.equal(Math.hypot(e.points[1][0]-e.points[0][0],e.points[1][1]-e.points[0][1]),80);assert.equal(Math.hypot(e.points[2][0]-e.points[1][0],e.points[2][1]-e.points[1][1]),40);assert.equal(h.state().doc.selectedReferenceId,null);assert.equal(h.state().undoStack.length,1);assert.ok(h.state().doc.sketches[e.group]);assert.equal(h.state().doc.sketches[e.group].bindings.width,'width-note');
+  await h.click('edit-sketch');h.el('sketch-value-width').value='100';await h.el('sketch-value-width').dispatch('input');h.el('sketch-confirm').checked=true;await h.click('sketch-preview');await h.click('sketch-accept');e=h.state().doc.entities[0];assert.equal(e.points[1][0]-e.points[0][0],100);assert.equal(h.state().doc.entities.length,1);assert.equal(h.state().undoStack.length,2);await h.click('undo');assert.equal(h.state().doc.entities[0].points[1][0]-h.state().doc.entities[0].points[0][0],80);
+});
+test('reconstruction missing dimensions and Cancel do not manufacture geometry or history',async()=>{
+  const h=setup();addReferenceFixture(h);h.state().sketch.open('image-1');await h.click('sketch-pick');await h.tap(400,400);await h.tap(450,400);h.el('sketch-confirm').checked=true;await h.click('sketch-preview');assert.equal(h.el('sketch-error').hidden,false);assert.match(h.el('sketch-error').textContent,/Underdetermined/);assert.equal(h.state().doc.entities.length,0);await h.click('sketch-cancel');assert.equal(h.state().undoStack.length,0);assert.equal(h.state().doc.entities.length,0);
 });

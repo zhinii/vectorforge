@@ -1,6 +1,6 @@
 // Advisory fabrication checks only. This is not a machine-safety certification.
-import { entityPoints, isClosed, arcAngles, entityLayer, dist, MAX_SCENE_ENTITIES, MAX_SCENE_POINTS, assertSceneBudget } from './model.mjs?v=20261024-11';
-import { checkEntity, extentPoints } from './dxf.mjs?v=20261024-11';
+import { entityPoints, isClosed, arcAngles, entityLayer, dist, MAX_SCENE_ENTITIES, MAX_SCENE_POINTS, assertSceneBudget } from './model.mjs?v=20261024-12';
+import { checkEntity, extentPoints } from './dxf.mjs?v=20261024-12';
 
 export const TINY_SEGMENT_MM = 0.01;
 export const MAX_INTERSECTION_CHECKS = 200000;
