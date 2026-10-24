@@ -1,11 +1,12 @@
-import { initWorkflow } from './workflow.mjs?v=20261023-9';
+import { constructionPreview } from './construction.mjs?v=20261024-10';
+import { initWorkflow } from './workflow.mjs?v=20261024-10';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261023-9';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261023-9';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261023-9';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261023-9';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261023-9';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-10';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-10';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-10';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-10';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-10';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -105,6 +106,7 @@ function translationSnap(anchors, offset, entityId) {
 let pending = null;       // first point / partial params for the active tool
 
 function canvasClick(world) {
+  mouse = world.slice();
   if (workflow?.clickPoint(world)) return true;
   if (tool === 'select') return false;
   if (tool === 'text') {
@@ -122,13 +124,13 @@ function canvasClick(world) {
             tool === 'rect' ? 'Click the opposite corner' :
             tool === 'star' ? 'Click the outer radius' :
             tool === 'arc' ? 'Click the start angle' : '');
-    return true;
+    draw(); return true;
   }
   const [x0, y0] = pending.start, [x1, y1] = world;
   let op = null;
   if (tool === 'bezier') {
-    if (!pending.control1) { pending.control1 = world; setHint('Click the second control handle'); return true; }
-    if (!pending.control2) { pending.control2 = world; setHint('Click the end point'); return true; }
+    if (!pending.control1) { pending.control1 = world; setHint('Click the second control handle'); draw(); return true; }
+    if (!pending.control2) { pending.control2 = world; setHint('Click the end point'); draw(); return true; }
     op = { op: 'bezier', from: pending.start, control1: pending.control1, control2: pending.control2, to: world };
   }
   if (tool === 'line' && Math.hypot(x1-x0, y1-y0) < .001) return true;
@@ -137,15 +139,17 @@ function canvasClick(world) {
   else if (tool === 'rect') op = { op: 'rect', center: [(x0 + x1) / 2, (y0 + y1) / 2], width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
   else if (tool === 'star') op = { op: 'star', center: [x0, y0], radius: Math.max(0.5, Math.hypot(x1 - x0, y1 - y0)), points: 5 };
   else if (tool === 'arc') {
-    if (!pending.radius) { pending.radius = Math.max(0.5, Math.hypot(x1 - x0, y1 - y0)); pending.a0 = Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI; setHint('Click the end angle'); return true; }
+    if (!pending.radius) { pending.radius = Math.max(0.5, Math.hypot(x1 - x0, y1 - y0)); pending.a0 = Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI; setHint('Click the end angle'); draw(); return true; }
     const a1 = Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI;
     op = { op: 'arc', center: pending.start, radius: pending.radius, start: pending.a0, end: a1 };
   }
   if (op && (op.op !== 'rect' || (op.width > 0.5 && op.height > 0.5))) {
-    pushUndo();
-    const { created } = applyOps(doc, [op]);
-    doc.selectedId = created[0] || null;
-    refreshTimeline();
+    const before = snapshot();
+    try {
+      const { created } = applyOps(doc, [op]);
+      cancelDesignRequest(); undoStack.push(before); limitHistory(undoStack); redoStack.length = 0;
+      doc.selectedId = created[0] || null; refreshTimeline();
+    } catch { addMsg('err', 'That edit is outside the supported drawing range.'); draw(); return true; }
   }
   pending = null; snapTarget = null;
   setHint('');
@@ -155,6 +159,7 @@ function canvasClick(world) {
 
 function drawPreview() {
   if (!pending) return;
+  if (tool === 'bezier' || tool === 'arc') { drawConstruction(); return; }
   const [x0, y0] = pending.start, [x1, y1] = mouse;
   ctx.save();
   ctx.setLineDash([5, 4]);
@@ -183,8 +188,50 @@ function drawPreview() {
   ctx.restore();
 }
 
+// Construction geometry is temporary, never part of the document or exports.
+function drawConstruction() {
+  const preview = constructionPreview(tool, pending, mouse);
+  ctx.save(); ctx.lineWidth = 1; ctx.strokeStyle = '#6b819d'; ctx.setLineDash([4, 4]);
+  for (const guide of preview.guides) {
+    ctx.beginPath(); guide.forEach((p,i) => { const s=w2s(p); i?ctx.lineTo(...s):ctx.moveTo(...s); }); ctx.stroke();
+  }
+  const curve = preview.curve;
+  if (curve) {
+    ctx.beginPath(); ctx.strokeStyle = '#61b5ff'; ctx.lineWidth = 2; ctx.setLineDash([7, 3]);
+    if (curve.type === 'bezier') { ctx.moveTo(...w2s(curve.p1)); ctx.bezierCurveTo(...w2s(curve.c1),...w2s(curve.c2),...w2s(curve.p2)); }
+    else { const c=w2s(curve.center); ctx.arc(...c,curve.radius*view.s,-curve.start*Math.PI/180,-curve.end*Math.PI/180,true); }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]); ctx.font = '12px system-ui';
+  // A next point can coincide with the last tap. Keep the committed marker
+  // visible instead of painting an uncommitted marker over it.
+  const markers = preview.markers.filter(m => m.kind === 'committed' || !preview.markers.some(f => f.kind === 'committed' && f.point[0] === m.point[0] && f.point[1] === m.point[1]));
+  for (const marker of markers) {
+    const p=w2s(marker.point), committed=marker.kind==='committed';
+    ctx.fillStyle=committed?'#ffb84d':'#10131a'; ctx.strokeStyle=committed?'#ffb84d':'#61b5ff';
+    ctx.beginPath();ctx.arc(...p,committed?4.5:3.5,0,Math.PI*2);ctx.fill();ctx.stroke();
+    const text=t(marker.label), width=ctx.measureText(text).width;
+    const x=Math.max(4,Math.min(canvas.clientWidth-width-8,p[0]+9));
+    const y=Math.max(14,Math.min(canvas.clientHeight-24,p[1]-9));
+    ctx.fillStyle='rgba(16,19,26,.9)';ctx.fillRect(x-3,y-12,width+6,16);
+    ctx.fillStyle=committed?'#ffd08a':'#9fc9ff';ctx.fillText(text,x,y);
+  }
+  ctx.restore();
+}
+function updateConstructionGuide() {
+  const active = tool === 'bezier' || tool === 'arc';
+  const guide = document.getElementById('construction-guide'); guide.hidden = !active;
+  if (!active) return;
+  const key = pending ? constructionPreview(tool,pending,mouse).stepKey : tool === 'bezier' ? 'Bézier 1/4: Place start point' : 'Arc 1/3: Place center';
+  const text = t(key) + ' · ' + t('Tap or drag to place. Pinch to navigate. Dashed geometry is a preview.');
+  const step = document.getElementById('construction-step'); if (step.textContent !== text) step.textContent = text;
+  document.getElementById('construction-cancel').disabled = !pending;
+}
+function cancelConstruction() { pending=null; toolTap=null; snapTarget=null; draw(); }
+
 // ---- rendering ----
 function draw() {
+  updateConstructionGuide();
   document.getElementById('undo').disabled = !undoStack.length;
   document.getElementById('redo').disabled = !redoStack.length;
   document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
@@ -375,7 +422,10 @@ canvas.addEventListener('pointerdown', ev => {
   if (ev.button === 1 || ev.button === 2) { drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
   if (ev.button !== 0 && ev.pointerType !== 'touch') return;
   if (suppressGesture) return;
-  if (tool !== 'select' || workflow?.picking()) { toolTap = { id: ev.pointerId, screen: s }; return; }
+  if (tool !== 'select' || workflow?.picking()) {
+    toolTap = { id: ev.pointerId, screen: s, dragPlacement: ev.pointerType === 'touch' && (tool === 'bezier' || tool === 'arc') };
+    mouse = drawingPoint(s2w(s)); draw(); return;
+  }
   const g = gripAt(s);
   if (g) { drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
   const e = entityAt(s);
@@ -391,7 +441,6 @@ canvas.addEventListener('pointerdown', ev => {
 canvas.addEventListener('pointermove', ev => {
   const s = evPos(ev);
   if (workflow?.pointerMove(s, ev)) return;
-  mouse = drawingPoint(s2w(s));
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, s);
   if (pinch && pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -407,6 +456,7 @@ canvas.addEventListener('pointermove', ev => {
     draw();
     return;
   }
+  if (!suppressGesture && drag?.mode !== 'pan') mouse = drawingPoint(s2w(s));
   if (suppressGesture || !drag) { draw(); return; }
   if (drag.mode !== 'pan' && drag.pointerId !== ev.pointerId) return;
   if (drag.mode !== 'pan' && !drag.undoPushed && !drag.moved && Math.hypot(s[0]-drag.screen[0], s[1]-drag.screen[1]) < 4) return;
@@ -442,7 +492,8 @@ canvas.addEventListener('pointermove', ev => {
 function endPointer(ev) {
   if (workflow?.pointerEnd()) { if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId); return; }
   if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
-      Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10) canvasClick(drawingPoint(s2w(evPos(ev))));
+      (toolTap.dragPlacement || Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10)) canvasClick(drawingPoint(s2w(evPos(ev))));
+  if (ev.type === 'pointercancel' && (tool === 'bezier' || tool === 'arc')) cancelConstruction();
   toolTap = null;
   pointers.delete(ev.pointerId);
   if (pointers.size < 2) pinch = null;
@@ -451,7 +502,7 @@ function endPointer(ev) {
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
-canvas.addEventListener('lostpointercapture', ev => { pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
+canvas.addEventListener('lostpointercapture', ev => { if (toolTap?.id === ev.pointerId && (tool === 'bezier' || tool === 'arc')) cancelConstruction(); pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
 canvas.addEventListener('contextmenu', ev => ev.preventDefault());
 // Keep two-finger drawing navigation inside the canvas, including mobile
 // browsers with legacy Touch Events. Browser zoom elsewhere remains enabled.
@@ -518,13 +569,14 @@ window.addEventListener('keydown', ev => {
 });
 
 // ---- toolbar / statusbar ----
-function setTool(t) { tool = t; pending = null; snapTarget = null;
+function setTool(t) { tool = t; pending = null; toolTap = null; snapTarget = null;
   document.querySelectorAll('#draw-tools .tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   canvas.classList.toggle('selecting', t === 'select');
   draw();
   setHint(t === 'select' ? '' : t === 'text' ? 'Click to place text' : 'Click the ' + (t === 'line' || t === 'bezier' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
 }
 document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+document.getElementById('construction-cancel').addEventListener('click', cancelConstruction);
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
 function deleteSelection() {

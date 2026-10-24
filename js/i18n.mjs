@@ -1,9 +1,26 @@
-import { workflowCatalog } from './workflow-i18n.mjs?v=20261023-9';
+import { workflowCatalog } from './workflow-i18n.mjs?v=20261024-10';
 
 // Deterministic English / Simplified Chinese UI catalog. Never translate CAD
 // operation names in model data or user/AI conversation content implicitly.
 export const catalogs = Object.freeze({
   en: Object.freeze({
+  "Start": "Start",
+  "Control 1": "Control 1",
+  "Control 2": "Control 2",
+  "End (preview)": "End (preview)",
+  "End": "End",
+  "Center": "Center",
+  "Arc start": "Arc start",
+  "Arc end": "Arc end",
+  "Bézier 1/4: Place start point": "Bézier 1/4: Place start point",
+  "Bézier 2/4: Place first control": "Bézier 2/4: Place first control",
+  "Bézier 3/4: Place second control": "Bézier 3/4: Place second control",
+  "Bézier 4/4: Place end point": "Bézier 4/4: Place end point",
+  "Arc 1/3: Place center": "Arc 1/3: Place center",
+  "Arc 2/3: Set radius and start": "Arc 2/3: Set radius and start",
+  "Arc 3/3: Set end angle (CCW)": "Arc 3/3: Set end angle (CCW)",
+  "Tap or drag to place. Pinch to navigate. Dashed geometry is a preview.": "Tap or drag to place. Pinch to navigate. Dashed geometry is a preview.",
+
   ...workflowCatalog.en,
   "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.",
   "VectorForge — AI 2D CAD": "VectorForge — AI 2D CAD",
@@ -205,6 +222,23 @@ export const catalogs = Object.freeze({
   "That text is outside the supported drawing range.": "That text is outside the supported drawing range."
 }),
   zh: Object.freeze({
+  "Start": "起点",
+  "Control 1": "控制点 1",
+  "Control 2": "控制点 2",
+  "End (preview)": "终点（预览）",
+  "End": "终点",
+  "Center": "圆心",
+  "Arc start": "圆弧起点",
+  "Arc end": "圆弧终点",
+  "Bézier 1/4: Place start point": "贝塞尔 1/4：放置起点",
+  "Bézier 2/4: Place first control": "贝塞尔 2/4：放置第一个控制点",
+  "Bézier 3/4: Place second control": "贝塞尔 3/4：放置第二个控制点",
+  "Bézier 4/4: Place end point": "贝塞尔 4/4：放置终点",
+  "Arc 1/3: Place center": "圆弧 1/3：放置圆心",
+  "Arc 2/3: Set radius and start": "圆弧 2/3：设置半径与起点",
+  "Arc 3/3: Set end angle (CCW)": "圆弧 3/3：设置终点角度（逆时针）",
+  "Tap or drag to place. Pinch to navigate. Dashed geometry is a preview.": "轻点或拖动后松开放置，双指缩放与平移。虚线仅为预览。",
+
   ...workflowCatalog.zh,
   "Connected to drawing service. Send a drawing command; the first response will verify the AI provider.": "已连接绘图服务。请发送绘图指令；首次响应将验证 AI 服务商连接。",
   "VectorForge — AI 2D CAD": "VectorForge — AI 二维 CAD",

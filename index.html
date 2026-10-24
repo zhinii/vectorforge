@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title data-i18n="VectorForge — AI 2D CAD">VectorForge — AI 2D CAD</title>
-<link rel="stylesheet" href="style.css?v=20261023-9">
+<link rel="stylesheet" href="style.css?v=20261024-10">
 </head>
 <body>
 
@@ -52,6 +52,7 @@
 
 <main id="workspace">
   <canvas id="canvas" tabindex="0" aria-label="Drawing canvas" data-i18n-aria-label="Drawing canvas"></canvas>
+  <div id="construction-guide" hidden><span id="construction-step" role="status" aria-live="polite"></span><button type="button" id="construction-cancel" data-i18n="Cancel">Cancel</button></div>
   <div id="statusbar">
     <span id="coords">0, 0 mm</span>
     <span id="hint" data-i18n="Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value">Scroll/pinch: zoom · Middle/Right/two-finger drag: pan · Drag grips to reshape · Tap a dimension to type its value</span>
@@ -136,7 +137,7 @@
 </dialog>
 <dialog id="annotation-dialog" aria-labelledby="annotation-title"><form id="annotation-form"><div class="panel-heading"><h2 id="annotation-title" data-i18n="Image annotation">Image annotation</h2><button type="button" id="annotation-close" class="close-btn" aria-label="Close" data-i18n-aria-label="Close">×</button></div><p id="annotation-explanation" class="note"></p><label id="annotation-value-label"><span data-i18n="Known dimension (mm)">Known dimension (mm)</span><input id="annotation-value" type="number" min="0.01" max="100000" step="any"></label><label><span data-i18n="Label or note (optional)">Label or note (optional)</span><input id="annotation-text" type="text" maxlength="120"></label><p id="annotation-error" class="error" role="alert" hidden></p><menu><button type="button" id="annotation-cancel" data-i18n="Cancel">Cancel</button><button type="submit" data-i18n="Apply">Apply</button></menu></form></dialog>
 
-<script type="module" src="js/main.mjs?v=20261023-9"></script>
+<script type="module" src="js/main.mjs?v=20261024-10"></script>
 </body>
 </html>
 
