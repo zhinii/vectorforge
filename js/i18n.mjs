@@ -1,4 +1,4 @@
-import { workflowCatalog } from './workflow-i18n.mjs?v=20261024-10';
+import { workflowCatalog } from './workflow-i18n.mjs?v=20261024-11';
 
 // Deterministic English / Simplified Chinese UI catalog. Never translate CAD
 // operation names in model data or user/AI conversation content implicitly.
