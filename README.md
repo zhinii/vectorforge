@@ -161,9 +161,21 @@ closed Timeline is removed from layout and workspace overflow is clipped so
 it cannot enlarge the mobile page. Browser accessibility zoom outside the
 canvas remains available.
 
+## Guided photo tracing and simpler controls (release 13)
+
+The primary strip is **Select · Draw · Shapes · Photo · Undo**. AI prompting stays in a slim bottom console; expand it for eight lines of conversation. Select a photo for **Guided trace · Delete · Options**. Image settings, threshold tracing, dimensioned reconstruction, layers and projects remain available under Options or Advanced, not on the initial canvas.
+
+1. **Photo → Take Photo / Choose Image.** The imported photo is selected on the canvas immediately. No image is uploaded to the AI provider.
+2. **Guided trace → tap a few points along the intended edge.** A bounded local contrast/tangent search follows pixels between taps. Place closer points around corners or faint details. **Undo** (including Ctrl+Z) removes a trace point, not the source photo. Pinch/pan remains available.
+3. **Finish line** for an open engraving path or **Close outline** for a closed cutting contour. Review the suggested boundary. Weak, interrupted or incoherent texture paths request closer guidance instead of adding a guessed segment. Repetitive textures and nearby boundaries can still be ambiguous; this is a pixel-guided suggestion, not semantic AI recognition.
+4. Optionally choose **Set known length**, tap two endpoints, and enter the real distance in millimetres. The numeric entry stages scale automatically. **Accept** scales this photo and the new trace together in one Undo step; existing vector geometry stays unchanged. Otherwise **Accept unscaled path** explicitly retains unverified size. Verify dimensions before fabrication.
+5. The accepted path has editable vertices and dimensions. The original photo stays underneath; Delete on a selected photo removes the photo and attached notes, not accepted paths. Undo restores it.
+
+The edge search uses at most 256 pixels on its longest side by default (hard cap 320), bounded memory/work, at most 64 anchors and 2,000 accepted path points. This reduces fine detail: add guidance, zoom in to inspect the result, and verify scale. Low-contrast rejection is heuristic, not proof of the correct physical edge. Photos are not perspective-corrected; handwritten dimensions are not automatically recognized. Existing assisted reconstruction and AI preview/accept workflows are preserved. See [advanced reconstruction](docs/ASSISTED_SKETCH_WORKFLOW.md).
+
 ## Local reference-to-fabrication workflow (release 9)
 
-Use **Import** for a JPEG/PNG or mobile **Take Photo**, or import a supported standalone SVG. Images never leave the browser and are not sent to the AI relay. Camera capture uses the phone's file/camera picker only when selected. JPEG/PNG inputs are limited to 10 MB and 32 megapixels; the retained underlay is a sanitized copy downsampled to at most 1024 pixels. Keep your original photograph separately. Up to six reference images can be stored in a local project.
+Use **Photo** for a JPEG/PNG or mobile **Take Photo**. Choose **Advanced import** for a supported standalone SVG. Images never leave the browser and are not sent to the AI relay. Camera capture uses the phone's file/camera picker only when selected. JPEG/PNG inputs are limited to 10 MB and 32 megapixels; the retained underlay is a sanitized copy downsampled to at most 1024 pixels. Keep your original photograph separately. Up to six reference images can be stored in a local project.
 
 1. Rotate/place the image and **Calibrate two points** against a known real distance. Calibration rescales that image and its attached annotations, not already-created vector geometry. Photos are not perspective-corrected; photograph flat paper straight on. There is no OCR or automatic dimensional reconstruction.
 2. **Write dimension** or **Add image note** creates reference-only annotations. Drag labels to reposition; edit/remove them in Import. These are user-entered labels, not geometry constraints. Existing blue geometry dimensions actually resize the selected vector entity.

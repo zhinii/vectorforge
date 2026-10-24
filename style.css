@@ -223,3 +223,61 @@ summary { cursor:pointer; color:#b9dbff; padding:8px 0; }
 #sketch-pick-toolbar { max-height:40dvh; overflow:auto; width:min(520px,94vw); }
 #sketch-pick-toolbar button { min-height:40px; }
 @media(max-height:400px) { #sketch-pick-toolbar { bottom:30px !important; max-height:45dvh; } }
+/* Canvas-first layout: one creation strip, contextual tools, one slim AI prompt. */
+#topbar { order:0; display:flex; flex-direction:row; align-items:center; gap:8px; padding:7px 10px; overflow:visible; background:#1c2532; }
+.primary-tools,.utility-tools { display:flex; align-items:center; gap:6px; min-width:0; }
+.utility-tools { margin-left:auto; }
+#topbar button { min-height:44px; min-width:58px; padding:8px 12px; font-size:13px; }
+#topbar #more-open,#topbar #language-toggle { min-width:42px; font-size:11px; padding:7px; }
+#workspace { order:1; }
+#console { order:2; position:relative; border-top:1px solid var(--line); border-bottom:0; padding-bottom:env(safe-area-inset-bottom,0px); }
+#chat-log { height:22px; max-height:22px; padding:1px 125px 1px 10px; }
+#console.expanded #chat-log { height:calc(1.5em * 8 + 8px); max-height:28dvh; padding:4px 12px; }
+#chat-expand { position:absolute; right:6px; top:0; height:22px; }
+#console.expanded #chat-expand { position:static; }
+#chat-form { padding:6px 10px; }
+#chat-input { font-family:system-ui,sans-serif; }
+#chat-form button { min-height:32px; }
+#chat-form #conn-light { min-height:16px; }
+.tool-menu,.photo-dialog { width:min(430px,var(--overlay-width,92vw)); }
+.tool-tiles,.photo-choices { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:12px 0; }
+.tool-tiles button,.photo-choices button { min-height:64px; padding:12px; font-size:16px; white-space:normal; }
+.photo-choices #take-photo { background:#246fba; border-color:#61b5ff; }
+.reference-context { width:auto; display:flex; align-items:center; gap:7px; flex-wrap:wrap; max-width:calc(100% - 16px); padding:7px; }
+.reference-context strong { max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.reference-context button { min-height:40px; }
+.reference-context-status { font-size:11px; }
+.primary-action { background:#246fba; border-color:#61b5ff; }
+#image-options-dialog { width:min(440px,var(--overlay-width,92vw)); }
+#image-options-dialog input[type=number] { width:100%; min-width:0; }
+.guided-trace-toolbar { position:absolute; z-index:5; left:8px; top:8px; width:min(460px,calc(100% - 16px)); max-height:calc(100% - 42px); overflow:auto; background:rgba(20,35,48,.97); border:1px solid #4388a8; border-radius:10px; padding:9px 11px; box-shadow:0 4px 14px #0005; }
+.guided-trace-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.guided-trace-toolbar p { margin:6px 0; font-size:12px; }
+.guided-trace-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.guided-trace-toolbar button { min-height:40px; }
+.guided-trace-toolbar input[type=number] { width:110px; max-width:100%; font-size:16px; padding:6px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:5px; }
+#guided-trace-error { color:#ffd395; }
+#guided-trace-scale { border-top:1px solid var(--line); padding-top:4px; }
+#guided-trace-accept { background:#246fba; border-color:#61b5ff; }
+@media(max-width:600px) {
+ #topbar { padding:5px; gap:4px; }
+ .primary-tools { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; }
+ .utility-tools { gap:3px; }
+ #topbar button { min-width:0; min-height:44px; font-size:11px; padding:6px 2px; white-space:normal; }
+ #topbar #more-open,#topbar #language-toggle { min-width:30px; width:34px; font-size:9px; padding:3px; }
+ #chat-form { padding:5px; gap:5px; }
+ #chat-input { font-size:16px; }
+ .reference-context { left:5px; bottom:26px; gap:5px; max-width:calc(100% - 10px); }
+ .reference-context strong,.reference-context #reference-context-status { display:none; }
+ .guided-trace-toolbar { left:5px; top:5px; width:calc(100% - 10px); max-height:52%; padding:7px; }
+}
+@media(max-height:400px) {
+ #topbar button { min-height:34px; }
+ #chat-log { display:none; }
+ #console.expanded #chat-log { display:block; max-height:20dvh; }
+ #chat-expand { display:none; }
+ .guided-trace-toolbar { width:min(440px,calc(100% - 10px)); max-height:calc(100% - 32px); }
+}
+/* Keep the edge-tapping area above the tracing controls; startup fits the photo there. */
+.guided-trace-toolbar { top:auto; bottom:26px; }
+@media(max-width:600px) { .guided-trace-toolbar { top:auto; bottom:24px; } }
