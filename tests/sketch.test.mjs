@@ -64,7 +64,7 @@ function uiHarness(){
     getContext(){return context;}
   }
   const document={getElementById:id=>nodes.get(id),createElement:tag=>new Element(tag)};
-  for(const [,id] of readFileSync(new URL('../docs/sketch-ui-fragment.html',import.meta.url),'utf8').matchAll(/id="([^"]+)"/g)){const el=new Element(id.includes('canvas')?'canvas':'div');el.id=id;}
+  for(const [,id] of readFileSync(new URL('../index.html',import.meta.url),'utf8').matchAll(/id="([^"]+)"/g)){const el=new Element(id.includes('canvas')?'canvas':'div');el.id=id;}
   const doc={...createDoc(),references:[],annotations:[],sketches:{}};let undos=0,clears=0;const ui=initSketch({document,doc,ctx:context,w2s:p=>p,pushUndo:()=>undos++,draw:()=>{},refreshTimeline:()=>{},openDialog:d=>{d.open=true;},setTool:()=>{},setHint:()=>{},t:x=>x,clearReferenceSelection:()=>{clears++;}});
   return {ui,doc,nodes,click:id=>nodes.get(id).fire('click'),undos:()=>undos,clears:()=>clears};
 }
