@@ -1,17 +1,19 @@
-import { constructionPreview } from './construction.mjs?v=20261024-11';
-import { initWorkflow } from './workflow.mjs?v=20261024-11';
+import { initSketch } from './sketch-ui.mjs?v=20261024-12';
+import { createDesignPreview, acceptDesignPreview, reconcileSketches, discardDesignPreview as rejectDesignPreview, designContentSignature } from './preview.mjs?v=20261024-12';
+import { constructionPreview } from './construction.mjs?v=20261024-12';
+import { initWorkflow } from './workflow.mjs?v=20261024-12';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-11';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-11';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-11';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-11';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-11';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-12';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-12';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-12';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-12';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-12';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const doc = createDoc();
-let workflow = null;
+let workflow = null, sketch = null, designPreview = null;
 
 // ---- view transform (world y-up ↔ screen y-down) ----
 const view = { s: 4, ox: 0, oy: 0 }; // px per mm, screen offset
@@ -29,7 +31,7 @@ function resize() {
 // ---- undo/redo (document snapshots) ----
 const undoStack = [], redoStack = [];
 function snapshot() {
-  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId, references: doc.references || [], annotations: doc.annotations || [], labelOffsets });
+  return JSON.stringify({ entities: doc.entities, timeline: doc.timeline, selectedId: doc.selectedId, references: doc.references || [], annotations: doc.annotations || [], sketches: doc.sketches || {}, selectedReferenceId: doc.selectedReferenceId || null, labelOffsets });
 }
 function limitHistory(stack) { let bytes=stack.reduce((n,s)=>n+s.length,0); while(stack.length>1&&(stack.length>100||bytes>24*1024*1024)) bytes-=stack.shift().length; }
 function pushUndo() { cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); redoStack.length = 0; }
@@ -37,11 +39,11 @@ function restore(snap) {
   const d = JSON.parse(snap);
   doc.entities = d.entities; doc.timeline = d.timeline; doc.selectedId = d.selectedId;
   labelOffsets = d.labelOffsets || {};
-  doc.references = d.references || []; doc.annotations = d.annotations || []; workflow?.refresh();
+  doc.references = d.references || []; doc.annotations = d.annotations || []; doc.sketches = d.sketches || {}; doc.selectedReferenceId = d.selectedReferenceId || null; workflow?.refresh(); sketch?.refresh();
   pending = null; drag = null; refreshTimeline(); draw();
 }
-function undo() { if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); limitHistory(redoStack); restore(undoStack.pop()); }
-function redo() { if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); restore(redoStack.pop()); }
+function undo() { workflow?.cancelGesture(); sketch?.cancel(); if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); limitHistory(redoStack); restore(undoStack.pop()); }
+function redo() { workflow?.cancelGesture(); sketch?.cancel(); if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); restore(redoStack.pop()); }
 
 // ---- interaction state ----
 let tool = 'select';
@@ -107,7 +109,7 @@ let pending = null;       // first point / partial params for the active tool
 
 function canvasClick(world) {
   mouse = world.slice();
-  if (workflow?.clickPoint(world)) return true;
+  if (sketch?.clickPoint(world) || workflow?.clickPoint(world)) return true;
   if (tool === 'select') return false;
   if (tool === 'text') {
     textPosition = world.slice();
@@ -219,9 +221,10 @@ function drawConstruction() {
   ctx.restore();
 }
 function updateConstructionGuide() {
-  const active = tool === 'bezier' || tool === 'arc';
+  const active = tool === 'bezier' || tool === 'arc' || workflow?.picking();
   const guide = document.getElementById('construction-guide'); guide.hidden = !active;
   if (!active) return;
+  if(workflow?.picking()){document.getElementById('construction-step').textContent=t(workflow.pickGuidance());document.getElementById('construction-cancel').disabled=false;return;}
   const key = pending ? constructionPreview(tool,pending,mouse).stepKey : tool === 'bezier' ? 'Bézier 1/4: Place start point' : 'Arc 1/3: Place center';
   const text = t(key) + ' · ' + t('Tap or drag to place. Pinch to navigate. Dashed geometry is a preview.');
   const step = document.getElementById('construction-step'); if (step.textContent !== text) step.textContent = text;
@@ -231,10 +234,13 @@ function cancelConstruction() { pending=null; toolTap=null; snapTarget=null; set
 
 // ---- rendering ----
 function draw() {
+  if(doc.selectedId && doc.selectedReferenceId)workflow?.clearReferenceSelection();
   updateConstructionGuide();
   document.getElementById('undo').disabled = !undoStack.length;
   document.getElementById('redo').disabled = !redoStack.length;
-  document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
+  document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId) && !workflow?.selectedReference();
+  document.getElementById('object-context').hidden = !doc.entities.some(e => e.id === doc.selectedId);
+  document.getElementById('edit-sketch').hidden = !doc.sketches?.[doc.entities.find(e=>e.id===doc.selectedId)?.group];
   document.getElementById('copy-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId);
   document.getElementById('paste-selected').disabled = !clipboard;
   const W = canvas.clientWidth, H = canvas.clientHeight;
@@ -260,7 +266,8 @@ function draw() {
   // grips + dimensions of the selected entity (context, per design discussion)
   const sel = doc.entities.find(e => e.id === doc.selectedId);
   if (sel) { drawGrips(sel); drawDimensions(sel); if (measurementsEnabled) drawNearbyDimensions(sel); }
-  workflow?.drawAnnotations();
+  workflow?.drawAnnotations(); workflow?.drawSelection(); sketch?.drawOverlay();
+  if(sketch?.picking() || workflow?.picking()){document.getElementById('reference-context').hidden=true;document.getElementById('object-context').hidden=true;}
   drawPreview();
   drawSnapTarget();
   requestCoords();
@@ -398,8 +405,7 @@ function dimensionAt(s) { return dimBoxes.find(b => s[0] >= b.x - 4 && s[0] <= b
 canvas.addEventListener('pointerdown', ev => {
   if (document.querySelector('dialog[open]')) return;
   const s = evPos(ev);
-  if (!workflow?.picking() && pointers.size === 0 && workflow?.pointerDown(s, ev)) { ev.preventDefault(); canvas.setPointerCapture(ev.pointerId); return; }
-  if (!workflow?.picking() && tool === 'select' && ev.button === 0 && pointers.size === 0) {
+  if (!workflow?.picking() && !sketch?.picking() && tool === 'select' && ev.button === 0 && pointers.size === 0) {
     const box = dimensionAt(s);
     if (box) {
       ev.preventDefault();
@@ -413,34 +419,33 @@ canvas.addEventListener('pointerdown', ev => {
   pointers.set(ev.pointerId, s);
   if (pointers.size === 2) {
     // Second finger down: cancel any drag, start pinch-zoom/pan.
-    drag = null; toolTap = null; suppressGesture = true;
+    workflow?.cancelGesture(); drag = null; toolTap = null; suppressGesture = true;
     const [a, b] = [...pointers.values()];
     pinch = { dist: Math.hypot(a[0] - b[0], a[1] - b[1]), mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
     return;
   }
   if (ev.pointerType === 'touch' && pointers.size > 1) return;
-  if (ev.button === 1 || ev.button === 2) { drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
+  if (ev.button === 1 || ev.button === 2) { workflow?.cancelGesture(); drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
   if (ev.button !== 0 && ev.pointerType !== 'touch') return;
   if (suppressGesture) return;
-  if (tool !== 'select' || workflow?.picking()) {
+  if (tool !== 'select' || workflow?.picking() || sketch?.picking()) {
     toolTap = { id: ev.pointerId, screen: s, dragPlacement: ev.pointerType === 'touch' && (tool === 'bezier' || tool === 'arc') };
     mouse = drawingPoint(s2w(s)); draw(); return;
   }
   const g = gripAt(s);
-  if (g) { drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
+  if (g) { workflow?.clearReferenceSelection(); drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
   const e = entityAt(s);
   if (e) {
-    doc.selectedId = e.id;
+    workflow?.clearReferenceSelection(); doc.selectedId = e.id;
     drag = { mode: 'move', e, start: s2w(s), anchors:translationAnchors(e), applied:[0,0], screen: s, pointerId: ev.pointerId, moved: false };
-  } else {
-    doc.selectedId = null;
+  } else if (workflow?.pointerDown(s, ev)) { ev.preventDefault(); return; } else {
+    doc.selectedId = null; workflow?.clearReferenceSelection();
   }
   draw();
 });
 
 canvas.addEventListener('pointermove', ev => {
   const s = evPos(ev);
-  if (workflow?.pointerMove(s, ev)) return;
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, s);
   if (pinch && pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -456,6 +461,7 @@ canvas.addEventListener('pointermove', ev => {
     draw();
     return;
   }
+  if (!suppressGesture && workflow?.pointerMove(s, ev)) return;
   if (!suppressGesture && drag?.mode !== 'pan') mouse = drawingPoint(s2w(s));
   if (suppressGesture || !drag) { draw(); return; }
   if (drag.mode !== 'pan' && drag.pointerId !== ev.pointerId) return;
@@ -469,7 +475,7 @@ canvas.addEventListener('pointermove', ev => {
   } else if (drag.mode === 'grip') {
     if (!drag.undoPushed) { pushUndo(); drag.undoPushed = true; }
     const original=JSON.parse(JSON.stringify(drag.e));
-    try { drag.grip.set(mouse); assertSceneBudget(doc.entities); } catch { Object.assign(drag.e,original); drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
+    try { drag.grip.set(mouse); assertSceneBudget(doc.entities); reconcileSketches(doc); } catch { Object.assign(drag.e,original); drag = null; addMsg('err', 'That edit is outside the supported drawing range.'); }
   } else if (drag.mode === 'move') {
     if (!drag.moved) { pushUndo(); drag.moved = true; }
     try {
@@ -481,7 +487,7 @@ canvas.addEventListener('pointermove', ev => {
       // Stage all group members before mutating any live geometry.
       const staged = moving.map(e=>JSON.parse(JSON.stringify(e))); staged.forEach(e=>moveEntity(e,delta));
       const updates=new Map(staged.map(e=>[e.id,e]));assertSceneBudget(doc.entities.map(e=>updates.get(e.id)||e));
-      moving.forEach((e,i)=>Object.assign(e,staged[i]));
+      moving.forEach((e,i)=>Object.assign(e,staged[i])); reconcileSketches(doc);
       drag.applied = applied;
     }
     catch { drag = null; addMsg('err', 'That move is outside the supported drawing range.'); }
@@ -490,7 +496,8 @@ canvas.addEventListener('pointermove', ev => {
 });
 
 function endPointer(ev) {
-  if (workflow?.pointerEnd()) { if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId); return; }
+  const workflowHandled = workflow?.pointerEnd(ev);
+  if (workflowHandled) { pointers.delete(ev.pointerId); if (pointers.size < 2) pinch=null; if (!pointers.size) {drag=null;suppressGesture=false;} if(canvas.hasPointerCapture(ev.pointerId))canvas.releasePointerCapture(ev.pointerId); return; }
   if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
       (toolTap.dragPlacement || Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10)) canvasClick(drawingPoint(s2w(evPos(ev))));
   if (ev.type === 'pointercancel' && (tool === 'bezier' || tool === 'arc')) cancelConstruction();
@@ -502,7 +509,7 @@ function endPointer(ev) {
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
-canvas.addEventListener('lostpointercapture', ev => { if (toolTap?.id === ev.pointerId && (tool === 'bezier' || tool === 'arc')) cancelConstruction(); pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
+canvas.addEventListener('lostpointercapture', ev => { workflow?.pointerEnd(ev); if (toolTap?.id === ev.pointerId && (tool === 'bezier' || tool === 'arc')) cancelConstruction(); pointers.delete(ev.pointerId); if (!pointers.size) { drag = null; pinch = null; toolTap = null; suppressGesture = false; } });
 canvas.addEventListener('contextmenu', ev => ev.preventDefault());
 // Keep two-finger drawing navigation inside the canvas, including mobile
 // browsers with legacy Touch Events. Browser zoom elsewhere remains enabled.
@@ -511,7 +518,7 @@ for (const type of ['touchstart', 'touchmove']) {
 }
 
 canvas.addEventListener('wheel', ev => {
-  ev.preventDefault();
+  workflow?.cancelGesture(); ev.preventDefault();
   const s = evPos(ev);
   const before = s2w(s);
   view.s *= ev.deltaY < 0 ? 1.12 : 1 / 1.12;
@@ -526,6 +533,7 @@ canvas.addEventListener('wheel', ev => {
 let dimensionBox = null;
 const dimensionDialog = document.getElementById('dimension-dialog');
 function openDimension(box) {
+  if (doc.sketches?.[box.entity.group]) { doc.selectedId=box.entity.id; sketch?.editSelected(); return; }
   dimensionBox = box;
   document.getElementById('dimension-title').textContent = `${box.entity.id}: ${t(box.dim.key)}`;
   const input = document.getElementById('dim-edit');
@@ -545,7 +553,7 @@ document.getElementById('dimension-form').addEventListener('submit', ev => {
   if (v !== dimensionBox.dim.value) {
     pushUndo();
     applyOps(doc, [{ op: 'set_dimension', id: dimensionBox.entity.id, dimension: dimensionBox.dim.key, value: v }]);
-    refreshTimeline(); draw();
+    reconcileSketches(doc); refreshTimeline(); draw();
   }
   dimensionDialog.close();
 });
@@ -560,7 +568,7 @@ window.addEventListener('keydown', ev => {
   else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); redo(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'c') { if (copySelection()) ev.preventDefault(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'v') { if (clipboard) { ev.preventDefault(); pasteSelection(); } }
-  else if (k === 'escape') { workflow?.cancel(); pending = null; doc.selectedId = null; setTool('select'); draw(); }
+  else if (k === 'escape') { sketch?.cancel(); workflow?.cancel(); workflow?.clearReferenceSelection(); pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
     ev.preventDefault();
     deleteSelection();
@@ -569,20 +577,21 @@ window.addEventListener('keydown', ev => {
 });
 
 // ---- toolbar / statusbar ----
-function setTool(t) { tool = t; pending = null; toolTap = null; snapTarget = null;
+function setTool(t) { workflow?.cancelGesture(); if(t!=='select')workflow?.clearReferenceSelection(); tool = t; pending = null; toolTap = null; snapTarget = null;
   document.querySelectorAll('#draw-tools .tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   canvas.classList.toggle('selecting', t === 'select');
   draw();
   setHint(t === 'select' ? '' : t === 'text' ? 'Click to place text' : 'Click the ' + (t === 'line' || t === 'bezier' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
 }
 document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
-document.getElementById('construction-cancel').addEventListener('click', cancelConstruction);
+document.getElementById('construction-cancel').addEventListener('click',()=>workflow?.picking()?workflow.cancel():cancelConstruction());
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
 function deleteSelection() {
+  if(workflow?.deleteSelectedReference())return;
   if (!doc.entities.some(e => e.id === doc.selectedId)) return;
   pushUndo(); applyOps(doc, [{ op: 'delete', id: doc.selectedId }]);
-  pending = null; refreshTimeline(); draw();
+  reconcileSketches(doc); pending = null; refreshTimeline(); draw();
 }
 document.getElementById('delete-selected').addEventListener('click', deleteSelection);
 function copySelection() {
@@ -603,7 +612,7 @@ function pasteSelection() {
     const before = snapshot(); cancelDesignRequest();
     const { created } = applyOps(doc,[op]);
     undoStack.push(before); limitHistory(undoStack); redoStack.length = 0;
-    pasteCount++; doc.selectedId = created[0]; pending = null; refreshTimeline(); draw();
+    reconcileSketches(doc); workflow?.clearReferenceSelection(); pasteCount++; doc.selectedId = created[0]; pending = null; refreshTimeline(); draw();
   } catch { addMsg('err','That copy is outside the supported drawing range.'); }
 }
 document.getElementById('copy-selected').addEventListener('click',copySelection);
@@ -712,6 +721,7 @@ document.addEventListener('pointerdown', ev => {
   if (timelinePanel.classList.contains('open') && !timelinePanel.contains(ev.target) && !timelineToggle.contains(ev.target)) setTimeline(false, false);
 });
 function openDialog(dialog, focus) {
+  workflow?.cancelGesture();
   syncOverlayViewport();
   pending = null; drag = null; toolTap = null; pointers.clear(); pinch = null;
   setTimeline(false, false); draw();
@@ -751,6 +761,34 @@ document.getElementById('text-form').addEventListener('submit',ev=>{
     error.textContent=t('Enter 1–120 characters on one line and a positive text size up to 1,000,000 mm.');error.hidden=false;
   }
 });
+
+
+// Proposed AI geometry is a separate, validated candidate until explicit acceptance.
+const aiPreviewDialog=document.getElementById('ai-preview-dialog');
+wireDialog(aiPreviewDialog,['ai-preview-close','ai-preview-reject']);
+aiPreviewDialog.addEventListener('close',()=>{ if(designPreview){rejectDesignPreview(designPreview.candidate);designPreview=null;} });
+function discardDesignPreview() { if(!designPreview)return;rejectDesignPreview(designPreview.candidate);designPreview=null;if(aiPreviewDialog.open)aiPreviewDialog.close(); }
+function renderDesignPreview(candidate) {
+  const target=document.getElementById('ai-preview-canvas'),c=target.getContext('2d');
+  const all=[...doc.entities,...candidate.entities],points=all.flatMap(entityPoints);
+  c.clearRect(0,0,target.width,target.height);if(!points.length)return;
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;for(const p of points){minX=Math.min(minX,p[0]);minY=Math.min(minY,p[1]);maxX=Math.max(maxX,p[0]);maxY=Math.max(maxY,p[1]);}
+  const scale=Math.min((target.width-30)/Math.max(1,maxX-minX),(target.height-30)/Math.max(1,maxY-minY));
+  const map=p=>[target.width/2+(p[0]-(minX+maxX)/2)*scale,target.height/2-(p[1]-(minY+maxY)/2)*scale];
+  for(const [entities,color] of [[doc.entities,'#536072'],[candidate.entities,'#61b5ff']])for(const e of entities){c.strokeStyle=color;c.fillStyle=color;c.lineWidth=1.5;if(e.type==='text'){c.font=Math.max(5,e.size*scale)+'px sans-serif';c.fillText(e.text,...map(e.c));continue;}c.beginPath();entityPoints(e).forEach((p,i)=>i?c.lineTo(...map(p)):c.moveTo(...map(p)));if(isClosed(e))c.closePath();c.stroke();}
+}
+function recordAcceptedHistory(question,reply){history.push({role:'user',content:question},{role:'assistant',content:reply});if(history.length>12)history.splice(0,history.length-12);}
+document.getElementById('ai-preview-accept').addEventListener('click',()=>{
+  if(!designPreview)return;const proposal=designPreview,before=snapshot();
+  try {const result=acceptDesignPreview(doc,proposal.candidate);designPreview=null;undoStack.push(before);limitHistory(undoStack);redoStack.length=0;if(result.created.length)doc.selectedId=result.created.at(-1);workflow?.clearReferenceSelection();recordAcceptedHistory(proposal.question,proposal.reply);aiPreviewDialog.close();refreshTimeline();draw();addMsg('ai','Accepted drawing. Undo restores the previous drawing.');}
+  catch {discardDesignPreview();addMsg('err','The drawing changed. Ask again for a fresh preview.');}
+});
+const moreDialog=document.getElementById('more-dialog');wireDialog(moreDialog,['more-close','more-cancel']);
+document.getElementById('more-open').addEventListener('click',()=>openDialog(moreDialog,document.getElementById('more-close')));
+for(const id of ['paste-selected','snap-toggle','measurements-toggle','timeline-toggle','export-svg','export-dxf'])document.getElementById(id).addEventListener('click',()=>moreDialog.close());
+document.getElementById('more-workshop').addEventListener('click',()=>{moreDialog.close();workflow?.open('layers');});
+document.getElementById('edit-sketch').addEventListener('click',()=>sketch?.editSelected());
+document.getElementById('chat-expand').addEventListener('click',()=>{const el=document.getElementById('console'),button=document.getElementById('chat-expand');const expanded=!el.classList.contains('expanded');el.classList.toggle('expanded',expanded);button.setAttribute('aria-expanded',String(expanded));button.textContent=t(expanded?'Hide conversation':'Show conversation');resize();});
 
 // ---- per-tab connection; intentionally never persisted ----
 try { localStorage.removeItem('vectorforge.connection'); sessionStorage.removeItem('vectorforge.connection'); } catch { /* Storage may be blocked. */ }
@@ -798,6 +836,7 @@ function cancelRequest(message = 'Request stopped. Nothing from it was applied.'
   if (message) addMsg('ai', message);
 }
 function cancelDesignRequest() {
+  if (designPreview) discardDesignPreview();
   if (activeRequest?.kind === 'design') cancelRequest('Drawing changed. The pending AI request was stopped; send it again to use the current scene.');
 }
 document.getElementById('cancel-request').addEventListener('click', () => cancelRequest());
@@ -920,32 +959,30 @@ document.getElementById('chat-form').addEventListener('submit', async ev => {
   // Never echo or send a secret pasted as part of a larger command.
   if (/sk-/i.test(q)) { input.value = ''; addMsg('err', 'Paste the API key by itself or use API settings. The text was not sent or displayed.'); return; }
   if (activeRequest) { addMsg('err', 'A request is running. Wait, or use Stop first.'); return; }
+  if(designPreview){addMsg('err','Accept or reject the current preview first.');return;}
   if (connState !== 'on' && connState !== 'ready') { addMsg('err', 'Use Connect in the console. Manual drawing and export work offline.'); return; }
   if (q.length > 1600) { addMsg('err', 'Keep the design request under 1,600 characters.'); return; }
   input.value = ''; addMsg('user', q);
   const request = { kind: 'design', controller: new AbortController(), thinking: addMsg('ai', 'Working…') };
   // Freeze submitted selection in scene; selection/pan/zoom during a request
   // must not discard it. Only geometry changes invalidate this snapshot.
-  const scene = serializeScene({ ...doc, entities: doc.entities.filter(e=>e.layer !== 'reference') }), sceneBefore = JSON.stringify(doc.entities);
+  const scene = serializeScene({ ...doc, entities: doc.entities.filter(e=>e.layer !== 'reference') }), sceneBefore = designContentSignature(doc);
   if (JSON.stringify(scene).length > 12000) { request.thinking.remove(); addMsg('err', 'This scene is too complex for AI. Local editing and export still work.'); return; }
   activeRequest = request; setBusy(true);
   try {
     const result = await askAgent(connection, { question: q, history, scene, language:getLanguage() }, request.controller.signal);
     if (activeRequest !== request) return;
     setConn('on', 'Connected to ' + connection.model);
-    if (JSON.stringify(doc.entities) !== sceneBefore) { cancelRequest('The selection or drawing changed. Send the request again for the current scene.'); return; }
-    // Validate/apply atomically before recording success, and avoid cancelling ourselves.
+    if (designContentSignature(doc) !== sceneBefore) { cancelRequest('The selection or drawing changed. Send the request again for the current scene.'); return; }
     activeRequest = null;
+    request.thinking.remove();
     if (result.ops.length) {
-      const before = snapshot();
-      const { created } = applyOps(doc, result.ops, 'ai');
-      undoStack.push(before); limitHistory(undoStack); redoStack.length = 0;
-      if (created.length) doc.selectedId = created.at(-1);
-      refreshTimeline(); draw();
-    }
-    request.thinking.remove(); addMsg('ai', result.reply, null, false);
-    history.push({ role: 'user', content: q }, { role: 'assistant', content: result.reply });
-    if (history.length > 12) history.splice(0, history.length - 12);
+      const candidate=createDesignPreview(doc,result.ops);designPreview={candidate,question:q,reply:result.reply};
+      document.getElementById('ai-preview-error').hidden=true;
+      document.getElementById('ai-preview-summary').textContent=t('Proposed objects:')+' '+candidate.entities.length+'. '+(candidate.invalidatedSketchGroups.length?t('Changes to a rebuilt sketch detach its driving dimensions.'):t('Review dimensions and geometry before accepting.'));
+      renderDesignPreview(candidate);openDialog(aiPreviewDialog,document.getElementById('ai-preview-reject'));
+    } else recordAcceptedHistory(q,result.reply);
+    addMsg('ai', result.reply, null, false);
   } catch (error) {
     if (request.controller.signal.aborted) return;
     request.thinking.remove();
@@ -963,13 +1000,14 @@ document.getElementById('language-toggle').addEventListener('click', () => {
     entry.body.textContent = entry.translate ? t(entry.safeText) : entry.safeText;
   }
   if (dimensionBox) document.getElementById('dimension-title').textContent = `${dimensionBox.entity.id}: ${t(dimensionBox.dim.key)}`;
-  workflow?.language(); draw();
+  workflow?.language(); sketch?.language(); draw();
 });
-workflow = initWorkflow({ document, window, doc, canvas, ctx, view, w2s, s2w, pushUndo, draw, refreshTimeline, openDialog, wireDialog, setTool, setHint, addMsg });
+workflow = initWorkflow({ document, window, doc, canvas, ctx, view, w2s, s2w, pushUndo, draw, refreshTimeline, openDialog, wireDialog, setTool, setHint, addMsg, openSketch:id=>sketch?.open(id), reconcileSketches });
+sketch = initSketch({document,window,doc,canvas,ctx,view,w2s,s2w,pushUndo,draw,refreshTimeline,openDialog,wireDialog,setTool,setHint,t,clearReferenceSelection:()=>workflow?.clearReferenceSelection()});
 applyTranslations(document);
 view.ox = canvas.clientWidth / 2 || 500;
 view.oy = canvas.clientHeight / 2 || 400;
-window.addEventListener('blur', () => { workflow?.pointerEnd(); drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
+window.addEventListener('blur', () => { workflow?.cancelGesture(); drag = null; toolTap = null; pointers.clear(); pinch = null; suppressGesture = false; });
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(canvas);
 resize(); refreshTimeline(); setTool('select');
