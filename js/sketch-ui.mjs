@@ -1,6 +1,6 @@
-import {reconstructSketch,inferOrthogonalDirections,validateSketchRegistry,MAX_SKETCH_VERTICES} from './sketch.mjs?v=20261024-13';
-import {createDoc,applyOps,entityPoints,isClosed} from './model.mjs?v=20261024-13';
-import {t as defaultT} from './i18n.mjs?v=20261024-13';
+import {reconstructSketch,inferOrthogonalDirections,validateSketchRegistry,MAX_SKETCH_VERTICES} from './sketch.mjs?v=20261024-14';
+import {createDoc,applyOps,entityPoints,isClosed} from './model.mjs?v=20261024-14';
+import {t as defaultT} from './i18n.mjs?v=20261024-14';
 export function initSketch(h){
   const {document,doc,ctx,w2s,pushUndo,draw,refreshTimeline,openDialog,setTool,setHint}=h,t=h.t||defaultT;
   const $=id=>document.getElementById(id),dialog=$('sketch-dialog');doc.sketches ||= {};h.wireDialog?.(dialog,[]);
