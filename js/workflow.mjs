@@ -1,10 +1,10 @@
-import {makeEntity,applyOps,createDoc,entityPoints,isClosed,moveEntity,serializeScene} from './model.mjs?v=20261023-9';
-import {parseSVG,traceRaster,loadRasterFile} from './import.mjs?v=20261023-9';
-import {listTemplates,generateTemplate} from './templates.mjs?v=20261023-9';
-import {preflight} from './preflight.mjs?v=20261023-9';
-import {toSVG,toDXF,download} from './dxf.mjs?v=20261023-9';
-import {encodeProject,decodeProject,referencePoint,referenceUV,calibrateReference,annotationLabel,traceOnReference,MAX_PROJECT_BYTES} from './project.mjs?v=20261023-9';
-import {t,getLanguage,applyTranslations} from './i18n.mjs?v=20261023-9';
+import {makeEntity,applyOps,createDoc,entityPoints,isClosed,moveEntity,serializeScene} from './model.mjs?v=20261024-10';
+import {parseSVG,traceRaster,loadRasterFile} from './import.mjs?v=20261024-10';
+import {listTemplates,generateTemplate} from './templates.mjs?v=20261024-10';
+import {preflight} from './preflight.mjs?v=20261024-10';
+import {toSVG,toDXF,download} from './dxf.mjs?v=20261024-10';
+import {encodeProject,decodeProject,referencePoint,referenceUV,calibrateReference,annotationLabel,traceOnReference,MAX_PROJECT_BYTES} from './project.mjs?v=20261024-10';
+import {t,getLanguage,applyTranslations} from './i18n.mjs?v=20261024-10';
 
 // Images and notes live beside geometry, never in the AI scene or cut exports.
 export function initWorkflow(h) {

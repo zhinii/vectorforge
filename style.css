@@ -188,3 +188,9 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 .error { color:#ffb3bb; }
 #checks-list { max-height:220px; overflow-y:auto; padding-left:20px; }
 @media(max-width:450px) { .workshop-tabs button,.button-row button { white-space:normal; flex:1 1 auto; } }
+
+/* Step guidance stays visible on touch layouts, where the long status hint hides. */
+#construction-guide { position:absolute; top:8px; left:8px; max-width:calc(100% - 16px); display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid #315778; border-radius:7px; background:rgba(16,29,44,.94); color:#b9dbff; max-height:calc(100% - 16px); overflow-y:auto; font-size:12px; pointer-events:none; z-index:2; }
+#construction-step { min-width:0; overflow-wrap:anywhere; }
+#construction-cancel { pointer-events:auto; min-height:36px; }
+@media (max-height:400px) { #construction-guide { top:3px; padding:3px 6px; font-size:11px; } #construction-cancel { min-height:28px; } }

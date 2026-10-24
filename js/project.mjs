@@ -1,6 +1,6 @@
 // Versioned local-only project format. Never stores connection settings or chat.
-import { createDoc, applyOps, serializeScene, validateText } from './model.mjs?v=20261023-9';
-import { inspectRaster } from './import.mjs?v=20261023-9';
+import { createDoc, applyOps, serializeScene, validateText } from './model.mjs?v=20261024-10';
+import { inspectRaster } from './import.mjs?v=20261024-10';
 export const MAX_PROJECT_BYTES = 16 * 1024 * 1024;
 export function referencePoint(ref, uv) {
   const a = ref.rotation * Math.PI / 180, x = (uv[0] - .5) * ref.width, y = (.5 - uv[1]) * ref.height;

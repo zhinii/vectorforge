@@ -8,6 +8,7 @@ import * as dxf from '../js/dxf.mjs';
 import * as i18n from '../js/i18n.mjs';
 import * as spatial from '../js/spatial.mjs';
 import {initWorkflow} from '../js/workflow.mjs';
+import {constructionPreview} from '../js/construction.mjs';
 
 // DOM contract/event regression harness, not a browser or layout/focus-trap test.
 // Production code is unchanged. Test-only read access is appended in a VM copy.
@@ -46,7 +47,7 @@ class Element {
   // Browser-native cancel/Escape default action, deliberately modeled rather than claimed verified.
   nativeEscape() { const ev = { type: 'cancel', target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; for (const fn of this.listeners.get('cancel') || []) fn(ev); if (!ev.defaultPrevented) this.close(); }
   getBoundingClientRect() { return this.tagName === 'DIALOG' ? { left: 100, top: 100, right: 700, bottom: 600 } : { left: 0, top: 0, right: 1000, bottom: 700 }; }
-  getContext() { return new Proxy({}, { get: (target, key) => target[key] ?? (key === 'measureText' ? text => ({ width: text.length * 7 }) : () => {}), set: (target, key, value) => (target[key] = value, true) }); }
+  getContext() { if(this.context)return this.context;this.calls=[];return this.context=new Proxy({}, { get:(target,key)=>target[key]??(key==='measureText'?text=>({width:text.length*7}):(...args)=>{this.calls.push([key,...args]);}), set:(target,key,value)=>(target[key]=value,true) }); }
   setPointerCapture(id) { this.captures.add(id); }
   hasPointerCapture(id) { return this.captures.has(id); }
   releasePointerCapture(id) { this.captures.delete(id); }
@@ -86,10 +87,10 @@ function setup({ deferredHealth = false, quickTimeout = false } = {}) {
     if (!deferredHealth) {healthCalls.push({url,options});return Promise.resolve(healthResult());}
     return new Promise((resolve,reject)=>{healthCalls.push({url,options,resolve,reject});options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});
   } return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); };
-  const context = vm.createContext({ initWorkflow, structuredClone, ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
+  const context = vm.createContext({ constructionPreview, initWorkflow, structuredClone, ...model, ...agent, ...dxf, ...i18n, ...spatial, readRelayStatus:(config,signal)=>agent.readRelayStatus(config,signal,fetcher), askAgent: (config, task, signal) => agent.askAgent(config, task, signal, fetcher), document, window, localStorage: storage, sessionStorage: storage,
     AbortController, URL, console, setTimeout:(fn,ms)=>setTimeout(fn,quickTimeout && ms===10000 ? 1 : ms), clearTimeout, requestAnimationFrame: fn => fn(), ResizeObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } } });
   const source = readFileSync(new URL('../js/main.mjs', import.meta.url), 'utf8').replace(/^import[^]*?from\s+'[^']+';\s*/gm, '');
-  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled, workflow });', context, { filename: 'main.mjs' });
+  vm.runInContext(source + '\n globalThis.inspect = () => ({ doc, view, tool, pending, undoStack, redoStack, dimBoxes, connection, activeRequest, history, connState, clipboard, snapEnabled, snapTarget, labelOffsets, selectedMeasurement, measurementsEnabled, workflow, mouse });', context, { filename: 'main.mjs' });
   const el = id => document.getElementById(id);
   const click = async id => { el(id).focus(); await el(id).dispatch('click'); };
   const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -606,3 +607,38 @@ test('fabrication export requires review and reports unclosed lines before expor
 test('image annotation chooses two points, preserves vector geometry, and is undoable',async()=>{const h=setup();h.state().doc.references=[{id:'image-1',name:'Paper',dataURL:'data:image/png;base64,AA==',center:[0,0],width:100,height:100,rotation:0,opacity:.5,locked:true,calibrated:false}];await h.click('workshop-open');await h.click('reference-measure');await h.tap(400,300);await h.tap(600,300);assert.equal(h.el('annotation-dialog').open,true);h.el('annotation-value').value='80';h.el('annotation-text').value='known';await h.el('annotation-form').dispatch('submit');assert.equal(h.state().doc.annotations.length,1);assert.equal(h.state().doc.annotations[0].value,80);assert.equal(h.state().doc.references[0].width,100);assert.equal(h.state().doc.entities.length,0);await h.click('undo');assert.equal(h.state().doc.annotations.length,0);});
 test('calibration rescales only the chosen reference and saves an explicit annotation',async()=>{const h=setup();h.state().doc.references=[{id:'image-1',name:'Paper',dataURL:'data:image/png;base64,AA==',center:[0,0],width:100,height:100,rotation:0,opacity:.5,locked:true,calibrated:false}];await h.click('workshop-open');await h.click('reference-calibrate');await h.tap(400,300);await h.tap(600,300);h.el('annotation-value').value='100';await h.el('annotation-form').dispatch('submit');assert.equal(h.state().doc.references[0].width,200);assert.equal(h.state().doc.references[0].calibrated,true);assert.equal(h.state().doc.annotations[0].value,100);});
 test('reference geometry is omitted from AI scenes and complex scene is stopped before network',async()=>{const h=setup();await h.connect();model.applyOps(h.state().doc,[{op:'text',text:'private note',layer:'reference'}]);h.submit('chat-form','draw a circle');await h.tick();const body=JSON.parse(h.requests.at(-1).options.body);assert.doesNotMatch(JSON.stringify(body),/private note/);await h.respond(h.requests.length-1);model.applyOps(h.state().doc,[{op:'path',points:Array.from({length:2000},(_,i)=>[i,i%3]),closed:false}]);const count=h.requests.length;await h.submit('chat-form','draw a square');assert.equal(h.requests.length,count);assert.match(h.log(),/too complex/i);});
+
+test('tap-only Bezier redraws each committed point and retains staged curve feedback', async()=>{
+  const h=setup();await h.tool('bezier');assert.match(h.el('construction-step').textContent,/1\/4/);assert.equal(h.el('construction-guide').hidden,false);
+  h.el('canvas').calls.length=0;await h.tap(400,400,{pointerType:'touch'});assert.equal(h.state().pending.start.join(','),'-25,-12.5');assert.equal(h.state().mouse.join(','),'-25,-12.5');
+  assert.ok(h.el('canvas').calls.some(c=>c[0]==='clearRect'));assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='Start'));assert.match(h.el('construction-step').textContent,/2\/4/);assert.equal(h.state().undoStack.length,0);
+  h.el('canvas').calls.length=0;await h.tap(440,280,{pointerType:'touch'});assert.ok(h.el('canvas').calls.some(c=>c[0]==='bezierCurveTo'));assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='Control 1'));assert.match(h.el('construction-step').textContent,/3\/4/);
+  h.el('canvas').calls.length=0;await h.tap(560,280,{pointerType:'touch'});assert.ok(h.el('canvas').calls.some(c=>c[0]==='bezierCurveTo'));assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='Control 2'));assert.match(h.el('construction-step').textContent,/4\/4/);assert.equal(h.state().doc.entities.length,0);
+  await h.tap(600,400,{pointerType:'touch'});const e=h.state().doc.entities[0];assert.equal(e.type,'bezier');assert.equal(e.p1.join(','),'-25,-12.5');assert.equal(e.c1.join(','),'-15,17.5');assert.equal(e.c2.join(','),'15,17.5');assert.equal(e.p2.join(','),'25,-12.5');assert.equal(h.state().pending,null);assert.equal(h.state().undoStack.length,1);assert.match(h.el('construction-step').textContent,/1\/4/);await h.click('undo');assert.equal(h.state().doc.entities.length,0);
+});
+test('Bezier hover and touch drag show a tentative curve but commit only one point on release',async()=>{
+  const h=setup();await h.tool('bezier');await h.tap(400,400,{pointerType:'touch'});h.el('canvas').calls.length=0;
+  await h.pointer('pointermove',440,300);assert.ok(h.el('canvas').calls.some(c=>c[0]==='bezierCurveTo'));assert.equal(h.state().pending.control1,undefined);
+  await h.pointer('pointerdown',440,300,{pointerType:'touch'});await h.pointer('pointermove',460,280,{pointerType:'touch'});assert.equal(h.state().pending.control1,undefined);await h.pointer('pointerup',460,280,{pointerType:'touch'});assert.equal(h.state().pending.control1.join(','),'-10,17.5');assert.equal(h.state().pending.control2,undefined);
+  await h.pointer('pointerup',460,280,{pointerType:'touch'});assert.equal(h.state().pending.control2,undefined);assert.equal(h.state().doc.entities.length,0);assert.equal(h.state().undoStack.length,0);
+});
+test('arc previews center, radius and start between taps and retains counterclockwise semantics',async()=>{
+  const h=setup();await h.tool('arc');await h.tap(500,350,{pointerType:'touch'});assert.match(h.el('construction-step').textContent,/2\/3/);assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='Center'));
+  h.el('canvas').calls.length=0;await h.tap(580,350,{pointerType:'touch'});assert.equal(h.state().pending.radius,20);assert.equal(h.state().pending.a0,0);assert.match(h.el('construction-step').textContent,/3\/3/);assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='Arc start'));assert.ok(h.el('canvas').calls.filter(c=>c[0]==='lineTo').length>=64);
+  h.el('canvas').calls.length=0;await h.pointer('pointermove',500,270);assert.ok(h.el('canvas').calls.some(c=>c[0]==='arc'&&c[3]===80&&c[6]===true));assert.equal(h.state().doc.entities.length,0);await h.tap(500,270,{pointerType:'touch'});const e=h.state().doc.entities[0];assert.equal(e.type,'arc');assert.equal(e.r,20);assert.equal(e.a0,0);assert.equal(e.a1,90);assert.equal(h.state().undoStack.length,1);assert.match(h.el('construction-step').textContent,/1\/3/);
+});
+test('curve pinch and right-pan navigate without committing or modifying construction points',async()=>{
+  const h=setup();await h.tool('bezier');await h.tap(400,400,{pointerType:'touch'});const start=JSON.stringify(h.state().pending.start);
+  await h.pointer('pointerdown',440,300,{pointerType:'touch'});await h.pointer('pointerdown',600,300,{pointerId:2,pointerType:'touch'});await h.pointer('pointermove',660,330,{pointerId:2,pointerType:'touch'});await h.pointer('pointerup',440,300,{pointerType:'touch'});await h.pointer('pointerup',660,330,{pointerId:2,pointerType:'touch'});
+  assert.equal(JSON.stringify(h.state().pending.start),start);assert.equal(h.state().pending.control1,undefined);assert.equal(h.state().doc.entities.length,0);
+  await h.pointer('pointerdown',500,400,{button:2});await h.pointer('pointermove',600,450,{button:2});await h.pointer('pointerup',600,450,{button:2});assert.equal(h.state().pending.control1,undefined);assert.equal(h.state().undoStack.length,0);
+});
+test('curve Cancel, pointercancel, unexpected capture loss, tool switch and Escape clear construction',async()=>{
+  const h=setup();await h.tool('bezier');await h.tap(400,400);await h.click('construction-cancel');assert.equal(h.state().pending,null);assert.match(h.el('construction-step').textContent,/1\/4/);
+  await h.tap(400,400);await h.pointer('pointerdown',450,300,{pointerType:'touch'});await h.pointer('pointercancel',450,300,{pointerType:'touch'});assert.equal(h.state().pending,null);
+  await h.tap(400,400);await h.pointer('pointerdown',450,300,{pointerType:'touch'});await h.pointer('lostpointercapture',450,300,{pointerType:'touch'});assert.equal(h.state().pending,null);
+  await h.tap(400,400);await h.tool('arc');assert.equal(h.state().pending,null);assert.match(h.el('construction-step').textContent,/1\/3/);await h.tap(400,400);await h.window.dispatch('keydown',{key:'Escape'});assert.equal(h.state().pending,null);assert.equal(h.el('construction-guide').hidden,true);assert.equal(h.state().doc.entities.length,0);assert.equal(h.state().undoStack.length,0);
+});
+test('curve step guidance and construction markers switch language without changing points',async()=>{
+  const h=setup();await h.tool('bezier');await h.tap(400,400);const pending=JSON.stringify(h.state().pending);h.el('canvas').calls.length=0;await h.click('language-toggle');assert.match(h.el('construction-step').textContent,/贝塞尔 2\/4/);assert.ok(h.el('canvas').calls.some(c=>c[0]==='fillText'&&c[1]==='起点'));assert.equal(JSON.stringify(h.state().pending),pending);assert.equal(h.el('construction-cancel').textContent,'取消');
+});
