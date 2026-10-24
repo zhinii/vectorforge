@@ -1,19 +1,21 @@
-import { initSketch } from './sketch-ui.mjs?v=20261024-12';
-import { createDesignPreview, acceptDesignPreview, reconcileSketches, discardDesignPreview as rejectDesignPreview, designContentSignature } from './preview.mjs?v=20261024-12';
-import { constructionPreview } from './construction.mjs?v=20261024-12';
-import { initWorkflow } from './workflow.mjs?v=20261024-12';
+import { referencePoint } from './project.mjs?v=20261024-13';
+import { initGuidedTrace } from './guided-trace-ui.mjs?v=20261024-13';
+import { initSketch } from './sketch-ui.mjs?v=20261024-13';
+import { createDesignPreview, acceptDesignPreview, reconcileSketches, discardDesignPreview as rejectDesignPreview, designContentSignature } from './preview.mjs?v=20261024-13';
+import { constructionPreview } from './construction.mjs?v=20261024-13';
+import { initWorkflow } from './workflow.mjs?v=20261024-13';
 // VectorForge main — canvas rendering, interaction, dimension editing, chat.
 import { createDoc, applyOps, serializeScene, entityPoints, entityGrips, entityDimensions,
-         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-12';
-import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-12';
-import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-12';
-import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-12';
-import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-12';
+         distanceToEntity, moveEntity, isClosed, arcAngles, assertSceneBudget } from './model.mjs?v=20261024-13';
+import { askAgent, validateConnection, readRelayStatus, DEFAULTS, RELAY } from './agent.mjs?v=20261024-13';
+import { toDXF, toSVG, download } from './dxf.mjs?v=20261024-13';
+import { snapPoint, snapCandidates, nearbyMeasurements } from './spatial.mjs?v=20261024-13';
+import { t, setLanguage, getLanguage, applyTranslations } from './i18n.mjs?v=20261024-13';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const doc = createDoc();
-let workflow = null, sketch = null, designPreview = null;
+let workflow = null, sketch = null, guided = null, designPreview = null;
 
 // ---- view transform (world y-up ↔ screen y-down) ----
 const view = { s: 4, ox: 0, oy: 0 }; // px per mm, screen offset
@@ -39,11 +41,11 @@ function restore(snap) {
   const d = JSON.parse(snap);
   doc.entities = d.entities; doc.timeline = d.timeline; doc.selectedId = d.selectedId;
   labelOffsets = d.labelOffsets || {};
-  doc.references = d.references || []; doc.annotations = d.annotations || []; doc.sketches = d.sketches || {}; doc.selectedReferenceId = d.selectedReferenceId || null; workflow?.refresh(); sketch?.refresh();
+  doc.references = d.references || []; doc.annotations = d.annotations || []; doc.sketches = d.sketches || {}; doc.selectedReferenceId = d.selectedReferenceId || null; workflow?.refresh(); sketch?.refresh(); guided?.refresh();
   pending = null; drag = null; refreshTimeline(); draw();
 }
-function undo() { workflow?.cancelGesture(); sketch?.cancel(); if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); limitHistory(redoStack); restore(undoStack.pop()); }
-function redo() { workflow?.cancelGesture(); sketch?.cancel(); if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); restore(redoStack.pop()); }
+function undo() { if(guided?.active()){guided.undoPoint();return;} guided?.cancel(); workflow?.cancelGesture(); sketch?.cancel(); if (!undoStack.length) return; cancelDesignRequest(); redoStack.push(snapshot()); limitHistory(redoStack); restore(undoStack.pop()); }
+function redo() { if(guided?.active())return; guided?.cancel(); workflow?.cancelGesture(); sketch?.cancel(); if (!redoStack.length) return; cancelDesignRequest(); undoStack.push(snapshot()); limitHistory(undoStack); restore(redoStack.pop()); }
 
 // ---- interaction state ----
 let tool = 'select';
@@ -109,7 +111,7 @@ let pending = null;       // first point / partial params for the active tool
 
 function canvasClick(world) {
   mouse = world.slice();
-  if (sketch?.clickPoint(world) || workflow?.clickPoint(world)) return true;
+  if (guided?.clickPoint(world) || sketch?.clickPoint(world) || workflow?.clickPoint(world)) return true;
   if (tool === 'select') return false;
   if (tool === 'text') {
     textPosition = world.slice();
@@ -236,8 +238,8 @@ function cancelConstruction() { pending=null; toolTap=null; snapTarget=null; set
 function draw() {
   if(doc.selectedId && doc.selectedReferenceId)workflow?.clearReferenceSelection();
   updateConstructionGuide();
-  document.getElementById('undo').disabled = !undoStack.length;
-  document.getElementById('redo').disabled = !redoStack.length;
+  document.getElementById('undo').disabled = !guided?.active() && !undoStack.length;
+  document.getElementById('redo').disabled = !!guided?.active() || !redoStack.length;
   document.getElementById('delete-selected').disabled = !doc.entities.some(e => e.id === doc.selectedId) && !workflow?.selectedReference();
   document.getElementById('object-context').hidden = !doc.entities.some(e => e.id === doc.selectedId);
   document.getElementById('edit-sketch').hidden = !doc.sketches?.[doc.entities.find(e=>e.id===doc.selectedId)?.group];
@@ -266,8 +268,8 @@ function draw() {
   // grips + dimensions of the selected entity (context, per design discussion)
   const sel = doc.entities.find(e => e.id === doc.selectedId);
   if (sel) { drawGrips(sel); drawDimensions(sel); if (measurementsEnabled) drawNearbyDimensions(sel); }
-  workflow?.drawAnnotations(); workflow?.drawSelection(); sketch?.drawOverlay();
-  if(sketch?.picking() || workflow?.picking()){document.getElementById('reference-context').hidden=true;document.getElementById('object-context').hidden=true;}
+  workflow?.drawAnnotations(); workflow?.drawSelection(); sketch?.drawOverlay(); guided?.drawOverlay();
+  if(guided?.active() || sketch?.picking() || workflow?.picking()){document.getElementById('reference-context').hidden=true;document.getElementById('object-context').hidden=true;}
   drawPreview();
   drawSnapTarget();
   requestCoords();
@@ -405,7 +407,7 @@ function dimensionAt(s) { return dimBoxes.find(b => s[0] >= b.x - 4 && s[0] <= b
 canvas.addEventListener('pointerdown', ev => {
   if (document.querySelector('dialog[open]')) return;
   const s = evPos(ev);
-  if (!workflow?.picking() && !sketch?.picking() && tool === 'select' && ev.button === 0 && pointers.size === 0) {
+  if (!workflow?.picking() && !sketch?.picking() && !guided?.active() && tool === 'select' && ev.button === 0 && pointers.size === 0) {
     const box = dimensionAt(s);
     if (box) {
       ev.preventDefault();
@@ -428,9 +430,9 @@ canvas.addEventListener('pointerdown', ev => {
   if (ev.button === 1 || ev.button === 2) { workflow?.cancelGesture(); drag = { mode: 'pan', start: s, ox: view.ox, oy: view.oy }; return; }
   if (ev.button !== 0 && ev.pointerType !== 'touch') return;
   if (suppressGesture) return;
-  if (tool !== 'select' || workflow?.picking() || sketch?.picking()) {
+  if (tool !== 'select' || workflow?.picking() || sketch?.picking() || guided?.active()) {
     toolTap = { id: ev.pointerId, screen: s, dragPlacement: ev.pointerType === 'touch' && (tool === 'bezier' || tool === 'arc') };
-    mouse = drawingPoint(s2w(s)); draw(); return;
+    mouse = guided?.active()?s2w(s):drawingPoint(s2w(s)); draw(); return;
   }
   const g = gripAt(s);
   if (g) { workflow?.clearReferenceSelection(); drag = { mode: 'grip', ...g, screen: s, pointerId: ev.pointerId }; return; }
@@ -461,7 +463,8 @@ canvas.addEventListener('pointermove', ev => {
     draw();
     return;
   }
-  if (!suppressGesture && workflow?.pointerMove(s, ev)) return;
+  if (!suppressGesture && !guided?.active() && workflow?.pointerMove(s, ev)) return;
+  if(!suppressGesture && drag?.mode!=='pan' && guided?.active()){mouse=s2w(s);guided.movePoint(mouse);draw();return;}
   if (!suppressGesture && drag?.mode !== 'pan') mouse = drawingPoint(s2w(s));
   if (suppressGesture || !drag) { draw(); return; }
   if (drag.mode !== 'pan' && drag.pointerId !== ev.pointerId) return;
@@ -499,7 +502,7 @@ function endPointer(ev) {
   const workflowHandled = workflow?.pointerEnd(ev);
   if (workflowHandled) { pointers.delete(ev.pointerId); if (pointers.size < 2) pinch=null; if (!pointers.size) {drag=null;suppressGesture=false;} if(canvas.hasPointerCapture(ev.pointerId))canvas.releasePointerCapture(ev.pointerId); return; }
   if (ev.type === 'pointerup' && toolTap?.id === ev.pointerId && !suppressGesture &&
-      (toolTap.dragPlacement || Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10)) canvasClick(drawingPoint(s2w(evPos(ev))));
+      (toolTap.dragPlacement || Math.hypot(...evPos(ev).map((v, i) => v - toolTap.screen[i])) < 10)) canvasClick(guided?.active()?s2w(evPos(ev)):drawingPoint(s2w(evPos(ev))));
   if (ev.type === 'pointercancel' && (tool === 'bezier' || tool === 'arc')) cancelConstruction();
   toolTap = null;
   pointers.delete(ev.pointerId);
@@ -568,22 +571,26 @@ window.addEventListener('keydown', ev => {
   else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); redo(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'c') { if (copySelection()) ev.preventDefault(); }
   else if ((ev.ctrlKey || ev.metaKey) && k === 'v') { if (clipboard) { ev.preventDefault(); pasteSelection(); } }
-  else if (k === 'escape') { sketch?.cancel(); workflow?.cancel(); workflow?.clearReferenceSelection(); pending = null; doc.selectedId = null; setTool('select'); draw(); }
+  else if (k === 'escape') { guided?.cancel(); sketch?.cancel(); workflow?.cancel(); workflow?.clearReferenceSelection(); pending = null; doc.selectedId = null; setTool('select'); draw(); }
   else if (k === 'delete' || k === 'backspace') {
     ev.preventDefault();
+    if(guided?.active()){guided.undoPoint();return;}
     deleteSelection();
   }
   else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && { v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc', b: 'bezier', t:'text' }[k]) setTool({ v: 'select', l: 'line', c: 'circle', r: 'rect', s: 'star', a: 'arc', b: 'bezier', t:'text' }[k]);
 });
 
 // ---- toolbar / statusbar ----
-function setTool(t) { workflow?.cancelGesture(); if(t!=='select')workflow?.clearReferenceSelection(); tool = t; pending = null; toolTap = null; snapTarget = null;
-  document.querySelectorAll('#draw-tools .tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
+function setTool(t) { guided?.cancel(); workflow?.cancelGesture(); if(t!=='select')workflow?.clearReferenceSelection(); tool = t; pending = null; toolTap = null; snapTarget = null;
+  document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   canvas.classList.toggle('selecting', t === 'select');
+  document.getElementById('tool-draw-open').classList.toggle('active',['line','arc','bezier','text'].includes(t));
+  document.getElementById('tool-shapes-open').classList.toggle('active',['rect','circle','star'].includes(t));
+  closeToolMenus();
   draw();
   setHint(t === 'select' ? '' : t === 'text' ? 'Click to place text' : 'Click the ' + (t === 'line' || t === 'bezier' ? 'start point' : t === 'rect' ? 'first corner' : 'centre point'));
 }
-document.querySelectorAll('#draw-tools .tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.getElementById('construction-cancel').addEventListener('click',()=>workflow?.picking()?workflow.cancel():cancelConstruction());
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
@@ -721,7 +728,7 @@ document.addEventListener('pointerdown', ev => {
   if (timelinePanel.classList.contains('open') && !timelinePanel.contains(ev.target) && !timelineToggle.contains(ev.target)) setTimeline(false, false);
 });
 function openDialog(dialog, focus) {
-  workflow?.cancelGesture();
+  guided?.cancel(); workflow?.cancelGesture();
   syncOverlayViewport();
   pending = null; drag = null; toolTap = null; pointers.clear(); pinch = null;
   setTimeline(false, false); draw();
@@ -783,6 +790,18 @@ document.getElementById('ai-preview-accept').addEventListener('click',()=>{
   try {const result=acceptDesignPreview(doc,proposal.candidate);designPreview=null;undoStack.push(before);limitHistory(undoStack);redoStack.length=0;if(result.created.length)doc.selectedId=result.created.at(-1);workflow?.clearReferenceSelection();recordAcceptedHistory(proposal.question,proposal.reply);aiPreviewDialog.close();refreshTimeline();draw();addMsg('ai','Accepted drawing. Undo restores the previous drawing.');}
   catch {discardDesignPreview();addMsg('err','The drawing changed. Ask again for a fresh preview.');}
 });
+function startGuidedPhoto(id){
+  cancelDesignRequest();
+  const r=doc.references.find(r=>r.id===id);if(!r)return;
+  const pts=[[0,0],[1,0],[1,1],[0,1]].map(p=>referencePoint(r,p));const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const reserve=Math.min(165,canvas.clientHeight*.4),height=Math.max(40,canvas.clientHeight-reserve-20);
+  view.s=Math.max(.05,Math.min(200,(canvas.clientWidth-28)/Math.max(1,maxX-minX),height/Math.max(1,maxY-minY)));
+  view.ox=canvas.clientWidth/2-(minX+maxX)/2*view.s;view.oy=height/2+10+(minY+maxY)/2*view.s;
+  guided?.start(id);
+}
+function closeToolMenus(){for(const id of ['draw-menu','shapes-menu']){const d=document.getElementById(id);if(d.open)d.close();}}
+for(const [menu,button] of [['draw-menu','tool-draw-open'],['shapes-menu','tool-shapes-open']]){const d=document.getElementById(menu);wireDialog(d,[menu+'-close']);document.getElementById(button).addEventListener('click',()=>openDialog(d,document.getElementById(menu+'-close')));}
 const moreDialog=document.getElementById('more-dialog');wireDialog(moreDialog,['more-close','more-cancel']);
 document.getElementById('more-open').addEventListener('click',()=>openDialog(moreDialog,document.getElementById('more-close')));
 for(const id of ['paste-selected','snap-toggle','measurements-toggle','timeline-toggle','export-svg','export-dxf'])document.getElementById(id).addEventListener('click',()=>moreDialog.close());
@@ -1000,10 +1019,11 @@ document.getElementById('language-toggle').addEventListener('click', () => {
     entry.body.textContent = entry.translate ? t(entry.safeText) : entry.safeText;
   }
   if (dimensionBox) document.getElementById('dimension-title').textContent = `${dimensionBox.entity.id}: ${t(dimensionBox.dim.key)}`;
-  workflow?.language(); sketch?.language(); draw();
+  workflow?.language(); sketch?.language(); guided?.language(); draw();
 });
-workflow = initWorkflow({ document, window, doc, canvas, ctx, view, w2s, s2w, pushUndo, draw, refreshTimeline, openDialog, wireDialog, setTool, setHint, addMsg, openSketch:id=>sketch?.open(id), reconcileSketches });
+workflow = initWorkflow({ document, window, doc, canvas, ctx, view, w2s, s2w, pushUndo, draw, refreshTimeline, openDialog, wireDialog, setTool, setHint, addMsg, openSketch:id=>sketch?.open(id),openGuidedTrace:id=>startGuidedPhoto(id),closeToolMenus,reconcileSketches });
 sketch = initSketch({document,window,doc,canvas,ctx,view,w2s,s2w,pushUndo,draw,refreshTimeline,openDialog,wireDialog,setTool,setHint,t,clearReferenceSelection:()=>workflow?.clearReferenceSelection()});
+guided = initGuidedTrace({document,window,doc,canvas,ctx,view,w2s,s2w,pushUndo,draw,refreshTimeline,setTool,setHint,t,onAccepted:(before,after)=>{const center=w2s(before.center);view.s=Math.max(.05,Math.min(200,view.s*before.width/after.width));view.ox=center[0]-after.center[0]*view.s;view.oy=center[1]+after.center[1]*view.s;},getRaster:id=>workflow.getRaster(id),clearReferenceSelection:()=>workflow.clearReferenceSelection()});
 applyTranslations(document);
 view.ox = canvas.clientWidth / 2 || 500;
 view.oy = canvas.clientHeight / 2 || 400;

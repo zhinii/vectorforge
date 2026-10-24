@@ -1,16 +1,16 @@
-import {makeEntity,applyOps,createDoc,entityPoints,isClosed,moveEntity,serializeScene} from './model.mjs?v=20261024-12';
-import {parseSVG,traceRaster,loadRasterFile} from './import.mjs?v=20261024-12';
-import {listTemplates,generateTemplate} from './templates.mjs?v=20261024-12';
-import {preflight} from './preflight.mjs?v=20261024-12';
-import {toSVG,toDXF,download} from './dxf.mjs?v=20261024-12';
-import {encodeProject,decodeProject,referencePoint,referenceUV,calibrateReference,annotationLabel,traceOnReference,MAX_PROJECT_BYTES} from './project.mjs?v=20261024-12';
-import {t,getLanguage,applyTranslations} from './i18n.mjs?v=20261024-12';
+import {makeEntity,applyOps,createDoc,entityPoints,isClosed,moveEntity,serializeScene} from './model.mjs?v=20261024-13';
+import {parseSVG,traceRaster,loadRasterFile} from './import.mjs?v=20261024-13';
+import {listTemplates,generateTemplate} from './templates.mjs?v=20261024-13';
+import {preflight} from './preflight.mjs?v=20261024-13';
+import {toSVG,toDXF,download} from './dxf.mjs?v=20261024-13';
+import {encodeProject,decodeProject,referencePoint,referenceUV,calibrateReference,annotationLabel,traceOnReference,MAX_PROJECT_BYTES} from './project.mjs?v=20261024-13';
+import {t,getLanguage,applyTranslations} from './i18n.mjs?v=20261024-13';
 
 // Images and notes live beside geometry, never in the AI scene or cut exports.
 export function initWorkflow(h) {
   const {document,window,doc,canvas,ctx,view,w2s,s2w,pushUndo,draw,refreshTimeline,openDialog,wireDialog,setTool,setHint,addMsg}=h;
   doc.references=doc.references||[];doc.annotations=doc.annotations||[];doc.selectedReferenceId=doc.selectedReferenceId||null;
-  const $=id=>document.getElementById(id), dialog=$('workshop-dialog');
+  const $=id=>document.getElementById(id), dialog=$('workshop-dialog'),photoDialog=$('photo-dialog'),imageOptions=$('image-options-dialog');
   const images=new Map(); let activeRef=null, preview=null, templatePreview=null, pick=null, annotationDraft=null, drag=null, boxes=[], generation=0;
   let section='import', resumeTrace=false;
   const unique=prefix=>prefix+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);
@@ -18,8 +18,8 @@ export function initWorkflow(h) {
   const ref=()=>doc.references.find(r=>r.id===activeRef);
   const selectedReference=()=>doc.references.find(r=>r.id===doc.selectedReferenceId)||null;
   const referenceStamp=r=>JSON.stringify([r.id,r.center,r.width,r.height,r.rotation,r.calibrated]);
-  const error=e=>{ $('workshop-error').textContent=t('Could not complete that step. Check the file, limits and values.')+' '+String(e?.message||e);$('workshop-error').hidden=false; };
-  const clearError=()=>{$('workshop-error').hidden=true;};
+  const error=e=>{ const target=$(photoDialog.open?'photo-error':'workshop-error');target.textContent=t('Could not complete that step. Check the file, limits and values.')+' '+String(e?.message||e);target.hidden=false; };
+  const clearError=()=>{$('workshop-error').hidden=true;$('photo-error').hidden=true;};
   const change=fn=>{pushUndo();fn();h.reconcileSketches?.(doc);refreshTimeline();draw();};
   const button=(id,fn)=>$(id).addEventListener('click',async()=>{clearError();try{await fn();}catch(e){error(e);}});
   const option=(select,value,text)=>{const o=document.createElement('option');o.value=value;o.textContent=text;select.appendChild(o);};
@@ -30,16 +30,20 @@ export function initWorkflow(h) {
   function open(which='import'){show(which);openDialog(dialog,$('workshop-close'));}
   wireDialog(dialog,['workshop-close','workshop-cancel']);
   dialog.addEventListener('close',()=>{generation++;preview=null;templatePreview=null;$('import-preview').hidden=true;$('template-result').hidden=true;});
-  button('workshop-open',()=>open());button('templates-open',()=>open('templates'));
+  wireDialog(photoDialog,['photo-close','photo-cancel']);wireDialog(imageOptions,['image-options-close','image-options-cancel']);
+  photoDialog.addEventListener('close',()=>{generation++;});
+  button('workshop-open',()=>openDialog(photoDialog,$('take-photo')));button('photo-advanced',()=>{photoDialog.close();open('import');});
+  button('image-options-open',()=>openDialog(imageOptions,$('image-options-close')));
+  button('templates-open',()=>{h.closeToolMenus?.();open('templates');});
   for(const b of document.querySelectorAll('[data-workshop]'))b.addEventListener('click',()=>show(b.dataset.workshop));
   button('choose-image',()=>$('image-file').click());button('take-photo',()=>$('camera-file').click());button('choose-svg',()=>$('svg-file').click());
   async function addImage(file){if(!file)return;if(doc.references.length>=6)throw Error(t('Keep at most six reference images per project.'));
     const token=++generation;const result=await loadRasterFile(file,{maxDimension:1024});
-    try{if(token!==generation||!dialog.open)return;
+    try{if(token!==generation||(!dialog.open&&!photoDialog.open))return;
       const temp=document.createElement('canvas');temp.width=result.imageData.width;temp.height=result.imageData.height;temp.getContext('2d').putImageData(result.imageData,0,0);
       const dataURL=temp.toDataURL('image/png');if(dataURL.length>4*1024*1024)throw Error(t('Image is too large after decoding. Use a smaller image.'));
-      const r={id:unique('image'),name:String(file.name||t('Photo')).replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu,'').slice(0,120),dataURL,center:[0,0],width:150,height:150*temp.height/temp.width,rotation:0,opacity:.55,locked:true,calibrated:false};
-      change(()=>{doc.references.push(r);activeRef=r.id;doc.selectedReferenceId=r.id;doc.selectedId=null;});getImage(r);refreshReferences();fit();
+      const r={id:unique('image'),name:String(file.name||t('Photo')).replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu,'').slice(0,120),dataURL,center:[0,0],width:150,height:150*temp.height/temp.width,rotation:0,opacity:.7,locked:false,calibrated:false};
+      change(()=>{doc.references.push(r);activeRef=r.id;doc.selectedReferenceId=r.id;doc.selectedId=null;});getImage(r);refreshReferences();fit();if(photoDialog.open)photoDialog.close();if(dialog.open)dialog.close();
     }finally{result.dispose?.();}
   }
   for(const id of ['image-file','camera-file'])$(id).addEventListener('change',async()=>{const file=$(id).files?.[0];$(id).value='';clearError();try{await addImage(file);}catch(e){error(e);}});
@@ -135,10 +139,11 @@ export function initWorkflow(h) {
   function startCalibration(id=doc.selectedReferenceId){if(!selectReference(id))return false;startPick('calibrate');return true;}
   button('reference-context-delete',deleteSelectedReference);
   button('reference-context-lock',()=>{const r=selectedReference();if(r)change(()=>{r.locked=!r.locked;});refreshContext();});
-  button('reference-context-calibrate',()=>startCalibration());
-  button('reference-context-trace',()=>startTrace());
+  button('reference-context-calibrate',()=>{imageOptions.close();startCalibration();});
+  button('reference-context-trace',()=>{const r=selectedReference();if(r)h.openGuidedTrace?.(r.id);});
+  button('image-threshold-trace',()=>{imageOptions.close();startTrace();});
   button('reference-rebuild',()=>{const r=ref();if(r){dialog.close();h.openSketch?.(r.id);}});
-  button('reference-context-sketch',()=>{const r=selectedReference();if(r)h.openSketch?.(r.id);});
+  button('reference-context-sketch',()=>{const r=selectedReference();if(r){imageOptions.close();h.openSketch?.(r.id);}});
   $('reference-context-opacity').addEventListener('change',()=>{const r=selectedReference(),value=Number($('reference-context-opacity').value);if(r&&Number.isFinite(value)&&value>=.05&&value<=1&&value!==r.opacity)change(()=>{r.opacity=value;});refreshContext();});
   $('reference-context-width').addEventListener('change',()=>{const r=selectedReference(),width=Number($('reference-context-width').value);if(!r||r.locked)return;const height=width*r.height/r.width;if(![width,height].every(v=>Number.isFinite(v)&&v>=.01&&v<=100000)){setHint(t('Enter finite image settings within the supported range.'));$('reference-context-width').value=Number(r.width.toFixed(3));refreshContext();return;}if(width!==r.width)change(()=>{Object.assign(r,{width,height,calibrated:false});});preview=null;$('trace-unverified').checked=false;refreshContext();});
   const corners=[[0,0],[1,0],[1,1],[0,1]];
@@ -188,7 +193,8 @@ export function initWorkflow(h) {
     }
     draw();return true;
   }
-  return {open,drawUnderlay,drawAnnotations,drawSelection:drawReferenceSelection,clickPoint,picking:()=>!!pick,pickGuidance:()=>pick?.kind==='note'?'Tap the note position on the image.':'Tap two points on the image. Escape cancels.',pointerDown,pointerMove,pointerEnd,cancelGesture,selectedReference,selectReference,deleteSelectedReference,clearReferenceSelection,startTrace,startCalibration,
+  async function getRaster(id){const r=doc.references.find(r=>r.id===id);if(!r)throw Error(t('Choose an image first.'));const entry=getImage(r);if(!entry.ready){if(typeof entry.image.decode==='function'){await entry.image.decode();entry.ready=true;}else throw Error(t('Wait for the image to finish loading.'));}const temp=document.createElement('canvas');temp.width=entry.image.naturalWidth;temp.height=entry.image.naturalHeight;if(temp.width>1024||temp.height>1024)throw Error(t('Image is too large after decoding. Use a smaller image.'));temp.getContext('2d').drawImage(entry.image,0,0);return temp.getContext('2d').getImageData(0,0,temp.width,temp.height);}
+  return {getRaster,open,drawUnderlay,drawAnnotations,drawSelection:drawReferenceSelection,clickPoint,picking:()=>!!pick,pickGuidance:()=>pick?.kind==='note'?'Tap the note position on the image.':'Tap two points on the image. Escape cancels.',pointerDown,pointerMove,pointerEnd,cancelGesture,selectedReference,selectReference,deleteSelectedReference,clearReferenceSelection,startTrace,startCalibration,
     cancel:()=>{pick=null;resumeTrace=false;cancelGesture();setHint('');draw();},
     refresh:()=>{cancelGesture();images.clear();activeRef=doc.references?.some(r=>r.id===activeRef)?activeRef:doc.references?.[0]?.id||null;if(!selectedReference())doc.selectedReferenceId=null;refreshContext();},
     groupMove:()=>$('group-move').checked,language:()=>{if(dialog.open)show(section);refreshContext();},fit};

@@ -1,7 +1,7 @@
 // Local, transactional AI proposals. The provider only receives serializeScene;
 // raster underlays, user annotations, and reconstruction records stay local.
-import { applyOps } from './model.mjs?v=20261024-12';
-export { reconcileSketches } from './sketch.mjs?v=20261024-12';
+import { applyOps } from './model.mjs?v=20261024-13';
+export { reconcileSketches } from './sketch.mjs?v=20261024-13';
 
 export const MAX_PREVIEW_OPS = 24;
 const previews = new WeakMap();
